@@ -1,0 +1,4 @@
+{
+    "github.gitProtocol": "ssh",
+    "podmanager.composeCommandStyle": "podman-compose"
+}
