@@ -1,2 +1,8 @@
+# --- API backend ---
 fastapi
 uvicorn
+
+# --- Scraper (Lotto / SuperEnalotto) ---
+mysql-connector-python>=8.0.33
+requests>=2.31.0
+beautifulsoup4>=4.12.0
