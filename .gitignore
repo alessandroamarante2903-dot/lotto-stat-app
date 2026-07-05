@@ -4,4 +4,5 @@ __pycache__/
 *.pyc
 
 # Escludi eventuali file di dati locali o temporanei
-db/storici/*.csv
+db/storici/*.csv 
+db/storici/*.txt
