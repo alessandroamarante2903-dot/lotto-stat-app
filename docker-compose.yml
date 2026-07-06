@@ -9,7 +9,7 @@ services:
       MYSQL_ROOT_PASSWORD: rootpassword
       MYSQL_DATABASE: lotto_statistics
     volumes:
-      - ./db:/docker-entrypoint-initdb.d:Z
+      - ./db/init-scripts:/docker-entrypoint-initdb.d:Z  # <--- MODIFICA QUESTA RIGA
       - db_data:/var/lib/mysql
     ports:
       - "3306:3306"
