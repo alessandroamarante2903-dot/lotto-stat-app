@@ -22,6 +22,7 @@ services:
     working_dir: /app
     volumes:
       - ./backend:/app:Z
+      - ./db/storici:/db/storici:Z
       - /app/.venv
     ports:
       - "8000:8000"
