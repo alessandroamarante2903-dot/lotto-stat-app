@@ -88,7 +88,7 @@ except ImportError:  # pragma: no cover
 # =====================================================================
 
 DB_CONFIG = {
-    "host": os.environ.get("DB_HOST", "mysql"),
+    "host": os.environ.get("DB_HOST", "db"),
     "port": int(os.environ.get("DB_PORT", "3306")),
     "database": os.environ.get("DB_NAME", "lotto_statistics"),
     "user": os.environ.get("DB_USER", "statistics_user"),
@@ -983,21 +983,32 @@ def aggiorna_nuove_estrazioni() -> None:
 # discendente. Il numero di concorso e la data si leggono quindi
 # direttamente dall'href (più stabile del testo visibile).
 #
-# NOTA: nel verificare questa pagina con una fetch HTTP diretta (senza
-# eseguire JavaScript) il contenuto era già presente nell'HTML — il
-# sito sembra server-renderizzato (Adobe Experience Manager) almeno per
-# questa pagina archivio. Selenium resta comunque implementato come
-# richiesto (più resiliente a eventuali componenti caricati in modo
-# asincrono, es. il controvalore del Jackpot in home page); se in
-# produzione verifichi che basta 'requests', puoi sostituire
-# _attendi_caricamento_e_ottieni_html con una semplice chiamata a
-# _fetch(url) per evitare la dipendenza da Chromium nel container.
+# NOTA: verificato con una fetch HTTP diretta (senza eseguire
+# JavaScript) che il contenuto è già presente nell'HTML — il sito è
+# server-renderizzato (Adobe Experience Manager) almeno per questa
+# pagina archivio. Il timeout osservato con Selenium in produzione è
+# quasi certamente bot-detection specifica sui browser automatizzati
+# (headless Chrome viene fingerprintato), non una protezione generale
+# del sito: una richiesta HTTP "normale" passa senza problemi.
+#
+# Per questo motivo l'HTTP diretto (_fetch, la stessa sessione con
+# retry usata per lottoced.com) è ora il METODO DI DEFAULT. Selenium
+# resta disponibile come fallback opzionale (--selenium sulla CLI o
+# SISAL_USA_SELENIUM=true), nel caso Sisal inizi a bloccare anche le
+# richieste HTTP dirette in futuro. Se l'HTTP diretto continua a
+# funzionare, puoi anche evitare del tutto chromium/chromedriver nel
+# Dockerfile.
 # =====================================================================
 
 SISAL_SUPERENALOTTO_BASE_URL = "https://www.sisal.it/estrazioni/superenalotto"
 
 SELENIUM_PAGE_LOAD_TIMEOUT = int(os.environ.get("SELENIUM_PAGE_LOAD_TIMEOUT", "30"))
 SELENIUM_ELEMENT_WAIT_TIMEOUT = int(os.environ.get("SELENIUM_ELEMENT_WAIT_TIMEOUT", "20"))
+
+# Metodo di default per FASE 3-bis: HTTP diretto (False) o Selenium (True).
+# Sovrascrivibile per singola chiamata da CLI (--selenium) o globalmente
+# con la variabile d'ambiente SISAL_USA_SELENIUM=true.
+SISAL_USA_SELENIUM_DEFAULT = os.environ.get("SISAL_USA_SELENIUM", "false").strip().lower() in ("1", "true", "yes")
 
 # Percorsi opzionali: nei container Linux il binario di Chromium e/o
 # chromedriver spesso non sono nel PATH standard di Selenium Manager.
@@ -1180,18 +1191,27 @@ def _parse_archivio_mensile_sisal_html(html: str) -> list:
     return estrazioni
 
 
-def scarica_estrazioni_superenalotto_sisal(anno: int, mese: int) -> list:
+def scarica_estrazioni_superenalotto_sisal(anno: int, mese: int, usa_selenium: Optional[bool] = None) -> list:
     """Scarica ed effettua il parsing di TUTTE le estrazioni SuperEnalotto
-    di un mese dall'archivio ufficiale Sisal, usando Selenium headless
-    per attendere il rendering dinamico prima del parsing con BeautifulSoup."""
-    url = _costruisci_url_archivio_mensile_sisal(anno, mese)
-    log.info("Sisal: carico %s ...", url)
+    di un mese dall'archivio ufficiale Sisal.
 
-    driver = _init_selenium_driver()
-    try:
-        html = _attendi_caricamento_e_ottieni_html(driver, url)
-    finally:
-        driver.quit()
+    usa_selenium=None (default) -> usa SISAL_USA_SELENIUM_DEFAULT (HTTP
+    diretto salvo diversa configurazione). Passare True per forzare
+    Selenium per questa chiamata, False per forzare l'HTTP diretto."""
+    if usa_selenium is None:
+        usa_selenium = SISAL_USA_SELENIUM_DEFAULT
+
+    url = _costruisci_url_archivio_mensile_sisal(anno, mese)
+    log.info("Sisal: carico %s (metodo: %s) ...", url, "Selenium" if usa_selenium else "HTTP diretto")
+
+    if usa_selenium:
+        driver = _init_selenium_driver()
+        try:
+            html = _attendi_caricamento_e_ottieni_html(driver, url)
+        finally:
+            driver.quit()
+    else:
+        html = _fetch(url)
 
     estrazioni = _parse_archivio_mensile_sisal_html(html)
     log.info("Sisal: %d estrazioni trovate per %04d-%02d.", len(estrazioni), anno, mese)
@@ -1231,11 +1251,13 @@ def _upsert_superenalotto(conn, estrazioni: list) -> tuple:
     return (inserite, aggiornate)
 
 
-def aggiorna_superenalotto_da_sisal(anno: Optional[int] = None, mese: Optional[int] = None) -> None:
+def aggiorna_superenalotto_da_sisal(anno: Optional[int] = None, mese: Optional[int] = None, usa_selenium: Optional[bool] = None) -> None:
     """Punto d'ingresso FASE 3-bis.
     - anno e mese specificati  -> scarica solo quel mese.
     - solo anno specificato    -> scarica tutti i 12 mesi di quell'anno (storico).
-    - nessuno dei due          -> scarica il mese corrente (nuove estrazioni)."""
+    - nessuno dei due          -> scarica il mese corrente (nuove estrazioni).
+    usa_selenium: None = usa il default (SISAL_USA_SELENIUM_DEFAULT, HTTP
+    diretto salvo configurazione diversa); True/False forza il metodo."""
     oggi = date.today()
     if anno is not None and mese is not None:
         mesi_da_scaricare = [(anno, mese)]
@@ -1248,7 +1270,7 @@ def aggiorna_superenalotto_da_sisal(anno: Optional[int] = None, mese: Optional[i
     try:
         for anno_corrente, mese_corrente in mesi_da_scaricare:
             try:
-                estrazioni = scarica_estrazioni_superenalotto_sisal(anno_corrente, mese_corrente)
+                estrazioni = scarica_estrazioni_superenalotto_sisal(anno_corrente, mese_corrente, usa_selenium=usa_selenium)
             except ScraperError as exc:
                 log.error("Sisal %04d-%02d: recupero fallito, salto al mese successivo. %s", anno_corrente, mese_corrente, exc)
                 continue
@@ -1283,15 +1305,24 @@ def main() -> None:
     parser.add_argument("--anno", type=int, help="Anno per --superenalotto-sisal (default: anno corrente).")
     parser.add_argument("--mese", type=int, choices=range(1, 13),
                          help="Mese 1-12 per --superenalotto-sisal. Se omesso con --anno, scarica tutti i 12 mesi.")
+    parser.add_argument(
+        "--selenium", action="store_true",
+        help="Forza Selenium invece dell'HTTP diretto per --superenalotto-sisal "
+             "(di default si usa l'HTTP diretto: più leggero e, empiricamente, meno "
+             "soggetto a bot-detection rispetto a un browser headless).",
+    )
     args = parser.parse_args()
 
     if args.mese is not None and args.anno is None:
         parser.error("--mese richiede anche --anno.")
 
     if args.superenalotto_sisal:
-        log.info("=== FASE 3-bis: SuperEnalotto da Sisal (Selenium) ===")
+        log.info("=== FASE 3-bis: SuperEnalotto da Sisal ===")
         crea_tabelle()
-        aggiorna_superenalotto_da_sisal(anno=args.anno, mese=args.mese)
+        aggiorna_superenalotto_da_sisal(
+            anno=args.anno, mese=args.mese,
+            usa_selenium=True if args.selenium else None,
+        )
         return
 
     solo_una_fase = args.setup or args.storico or args.nuove
