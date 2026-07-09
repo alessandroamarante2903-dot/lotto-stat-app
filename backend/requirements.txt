@@ -1,8 +1,13 @@
-# --- API backend ---
-fastapi
-uvicorn
+# --- API & Server ---
+fastapi==0.111.0
+uvicorn==0.30.1
 
-# --- Scraper (Lotto / SuperEnalotto) ---
-mysql-connector-python>=8.0.33
-requests>=2.31.0
-beautifulsoup4>=4.12.0
+# --- Database ---
+mysql-connector-python==8.0.33
+
+# --- Scraper & Parsing ---
+requests==2.32.3
+beautifulsoup4==4.12.3
+
+# --- Automation (Sisal / SuperEnalotto) ---
+selenium==4.22.0
