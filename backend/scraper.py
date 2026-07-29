@@ -3,27 +3,32 @@
 scraper.py
 ==========
 
-Gestisce l'intero ciclo di vita del database `lotto_statistics` in 3 fasi:
+Gestisce l'intero ciclo di vita del database `lotto_statistics`:
 
-  FASE 1 - crea_tabelle()            -> CREATE TABLE IF NOT EXISTS
-  FASE 2 - carica_storico_locale()   -> importa db/storici/storico.txt
-                                         (solo se estrazioni_lotto è vuota)
-  FASE 3 - aggiorna_nuove_estrazioni() -> recupera l'ultima estrazione via
-                                          web/API e la inserisce se mancante
+  FASE 1     - crea_tabelle()               -> CREATE TABLE IF NOT EXISTS
+                                                (+ migrazione automatica di
+                                                tipo_regolamento se mancante)
+  FASE 2     - carica_storico_locale()      -> importa db/storici/storico.txt
+                                                (solo se estrazioni_lotto è vuota)
+  FASE 3     - aggiorna_nuove_estrazioni()  -> recupera l'ultima estrazione
+                                                (Lotto + SuperEnalotto) via
+                                                web/API e la inserisce se mancante
+  FASE 3-ter - aggiorna_superenalotto_storico_lottoced() -> backfill storico
+                                                completo del SuperEnalotto da
+                                                lottoced.com, anno per anno
 
 Dipendenze (vedi requirements.txt):
     mysql-connector-python
     requests
     beautifulsoup4
+    selenium (opzionale: solo se si usa _init_selenium_driver per siti futuri)
 
 CONNESSIONE AL DATABASE
 ------------------------
 Lo script si connette sempre con l'utenza applicativa 'statistics_user'
-definita in db/init.sql. Perché la FASE 1 (CREATE TABLE) funzioni, quella
-utenza deve avere anche il privilegio CREATE oltre a SELECT/INSERT/
-UPDATE/DELETE — vedi il GRANT aggiornato in init.sql. Se preferisci non
-concedere CREATE all'utente applicativo, esegui tu le DDL una tantum
-come utente admin e salta la FASE 1 (--nuove / --storico).
+definita in db/init.sql. Perché la FASE 1 (CREATE TABLE / ALTER TABLE)
+funzioni, quella utenza deve avere anche i privilegi CREATE e ALTER oltre
+a SELECT/INSERT/UPDATE/DELETE — vedi il GRANT aggiornato in init.sql.
 
 FASE 2: FORMATO DI storico.txt
 --------------------------------
@@ -34,11 +39,21 @@ Campi: data (YYYY/MM/DD), sigla ruota a 2 lettere, 5 numeri estratti.
 Le sigle riconosciute sono quelle standard dell'archivio ufficiale
 Lottomatica: BA, CA, FI, GE, MI, NA, PA, RM, RN, TO, VE (vedi
 SIGLE_RUOTE). 'concorso' non è presente nel file e viene salvato come
-NULL per tutte le righe storiche (per questo la tabella lo ammette
-nullable e il vincolo di unicità è su data_estrazione+ruota, non su
-concorso).
+NULL per tutte le righe storiche.
 
-FASE 3: FONTI DATI (architettura a provider con fallback)
+LE TRE ERE STORICHE DEL SUPERENALOTTO (tipo_regolamento)
+-------------------------------------------------------------
+Il meccanismo di estrazione del SuperEnalotto è cambiato nel tempo e
+questo condiziona le statistiche (vedi discussione completa nella
+risposta associata a questa revisione). Ogni riga di
+estrazioni_superenalotto viene classificata in un campo ENUM
+`tipo_regolamento`, calcolato automaticamente da `_determina_tipo_regolamento()`:
+
+    < 1997-12-03              -> 'SIMULATO'      (dati retroattivi sul Lotto storico)
+    1997-12-03 - 2009-06-30   -> 'LOTTO'         (combinazione derivata da 6 ruote del Lotto)
+    >= 2009-07-01             -> 'INDIPENDENTE'  (estrazione moderna, urne dedicate)
+
+FASE 3: FONTI DATI LIVE (architettura a provider con fallback)
 -------------------------------------------------------------
 Per ogni gioco esiste una lista ordinata di "provider", tentati in
 ordine finché uno non restituisce un risultato valido:
@@ -49,13 +64,32 @@ ordine finché uno non restituisce un risultato valido:
 
 I provider API (RapidAPI, magayo) richiedono una API key via variabile
 d'ambiente e si auto-escludono se non configurati (vedi .env.example).
-Lo scraping HTML punta a lottoced.com, verificato funzionante (a
-differenza dei siti ufficiali lotto-italia.it/superenalotto.it, protetti
-da bot-detection). Nessuna delle fonti HTML fornisce il numero di
-concorso: viene dedotto con `_deduci_concorso_superenalotto()` per il
-SuperEnalotto (per il Lotto resta NULL, coerentemente con lo storico).
-Il markup di siti terzi cambia nel tempo: i punti da verificare sono
-segnalati con `# TODO`.
+Lo scraping HTML punta a lottoced.com, verificato funzionante via
+richieste HTTP dirette (a differenza dei siti ufficiali sisal.it,
+lotto-italia.it, superenalotto.it: tutti protetti da bot-detection —
+Sisal in particolare risponde con timeout sistematici, verosimilmente
+WAF Akamai, sia con Selenium headless sia con richieste dirette da
+alcune reti). Nessuna fonte HTML fornisce il numero di concorso per il
+SuperEnalotto: viene dedotto con `_deduci_concorso_superenalotto()`
+(FASE 3, incrementale) o `_assegna_concorsi_sequenziali_annuali()`
+(FASE 3-ter, per anno intero — più affidabile). Il markup di siti terzi
+cambia nel tempo: i punti da verificare sono segnalati con `# TODO`.
+
+FASE 3-ter: STORICO SUPERENALOTTO DA LOTTOCED.COM
+-------------------------------------------------------------
+`aggiorna_superenalotto_storico_lottoced(anno_inizio, anno_fine)` scarica
+via HTTP diretto (no Selenium) l'archivio annuale di lottoced.com per
+ogni anno nell'intervallo e fa upsert in batch (ON DUPLICATE KEY UPDATE,
+IMPORT_BATCH_SIZE righe per batch) con `tipo_regolamento` calcolato
+correttamente per ogni riga in base alla sua data.
+
+SELENIUM: DISPONIBILE MA NON PIÙ USATO DI DEFAULT
+-------------------------------------------------------------
+`_init_selenium_driver()` resta nel codice come utility pronta all'uso
+per eventuali future fonti che richiedano JavaScript, ma nessun
+percorso corrente la richiama: sia lo storico che il live SuperEnalotto
+usano solo `requests`/BeautifulSoup. Se in futuro serve, va richiamata
+esplicitamente da una nuova funzione dedicata al sito in questione.
 """
 
 from __future__ import annotations
@@ -243,6 +277,31 @@ def get_db_connection():
 
 
 # =====================================================================
+# LE TRE ERE STORICHE DEL SUPERENALOTTO
+# =====================================================================
+# Vedi discussione statistica completa nella risposta associata a
+# questa revisione: il meccanismo di estrazione è cambiato due volte
+# nella storia del gioco e questo condiziona le statistiche
+# (frequenze, ritardi, abbinamenti) se le epoche vengono mescolate
+# senza distinzione.
+
+DATA_INIZIO_ERA_LOTTO = date(1997, 12, 3)         # da qui: gioco reale, combinazione derivata dal Lotto
+DATA_INIZIO_ERA_INDIPENDENTE = date(2009, 7, 1)   # da qui: urne dedicate, indipendenti dal Lotto
+
+TIPO_REGOLAMENTO_VALORI = ("SIMULATO", "LOTTO", "INDIPENDENTE")
+
+
+def _determina_tipo_regolamento(data_estrazione: date) -> str:
+    """Classifica una data di estrazione SuperEnalotto in una delle tre
+    ere regolamentari (vedi costanti sopra)."""
+    if data_estrazione < DATA_INIZIO_ERA_LOTTO:
+        return "SIMULATO"
+    if data_estrazione < DATA_INIZIO_ERA_INDIPENDENTE:
+        return "LOTTO"
+    return "INDIPENDENTE"
+
+
+# =====================================================================
 # FASE 1: CREAZIONE E CONTROLLO TABELLE
 # =====================================================================
 
@@ -277,15 +336,79 @@ _DDL_ESTRAZIONI_SUPERENALOTTO = """
         n6              TINYINT UNSIGNED NOT NULL,
         jolly           TINYINT UNSIGNED NOT NULL,
         superstar       TINYINT UNSIGNED NULL,
+        tipo_regolamento ENUM('SIMULATO', 'LOTTO', 'INDIPENDENTE') NOT NULL,
         creato_il       TIMESTAMP   DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE KEY uq_estrazione_superenalotto (data_estrazione, concorso)
+        UNIQUE KEY uq_estrazione_superenalotto (data_estrazione, concorso),
+        KEY idx_superenalotto_tipo_regolamento (tipo_regolamento)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
 """
 
 
+def _migra_colonna_tipo_regolamento(conn) -> None:
+    """Migrazione idempotente: se estrazioni_superenalotto esiste già
+    (da un'installazione precedente a questa revisione) e non ha ancora
+    la colonna tipo_regolamento, la aggiunge e la valorizza per tutte le
+    righe esistenti in base alla loro data_estrazione, poi la rende
+    NOT NULL. Se la tabella è stata appena creata da _DDL_ESTRAZIONI_SUPERENALOTTO
+    la colonna esiste già e questa funzione non fa nulla."""
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = %s AND TABLE_NAME = 'estrazioni_superenalotto'
+              AND COLUMN_NAME = 'tipo_regolamento'
+            """,
+            (DB_CONFIG["database"],),
+        )
+        (colonna_presente,) = cursor.fetchone()
+        if colonna_presente:
+            return
+
+        log.info(
+            "Migrazione: colonna 'tipo_regolamento' assente su estrazioni_superenalotto, "
+            "la aggiungo e la valorizzo per le righe esistenti..."
+        )
+        # Nullable in un primo momento: una ALTER ADD COLUMN NOT NULL
+        # senza DEFAULT fallirebbe su una tabella già popolata.
+        cursor.execute(
+            "ALTER TABLE estrazioni_superenalotto "
+            "ADD COLUMN tipo_regolamento ENUM('SIMULATO', 'LOTTO', 'INDIPENDENTE') NULL"
+        )
+        cursor.execute(
+            """
+            UPDATE estrazioni_superenalotto
+            SET tipo_regolamento = CASE
+                WHEN data_estrazione < %s THEN 'SIMULATO'
+                WHEN data_estrazione < %s THEN 'LOTTO'
+                ELSE 'INDIPENDENTE'
+            END
+            WHERE tipo_regolamento IS NULL
+            """,
+            (DATA_INIZIO_ERA_LOTTO, DATA_INIZIO_ERA_INDIPENDENTE),
+        )
+        righe_valorizzate = cursor.rowcount
+        cursor.execute(
+            "ALTER TABLE estrazioni_superenalotto "
+            "MODIFY COLUMN tipo_regolamento ENUM('SIMULATO', 'LOTTO', 'INDIPENDENTE') NOT NULL"
+        )
+        cursor.execute(
+            "ALTER TABLE estrazioni_superenalotto "
+            "ADD INDEX idx_superenalotto_tipo_regolamento (tipo_regolamento)"
+        )
+        conn.commit()
+        log.info(
+            "Migrazione completata: tipo_regolamento aggiunta e valorizzata per %d righe esistenti.",
+            righe_valorizzate,
+        )
+    finally:
+        cursor.close()
+
+
 def crea_tabelle() -> None:
-    """FASE 1: crea le tabelle se non esistono già (idempotente).
-    Richiede che 'statistics_user' abbia il privilegio CREATE su
+    """FASE 1: crea le tabelle se non esistono già (idempotente) e
+    applica la migrazione di tipo_regolamento se necessario. Richiede
+    che 'statistics_user' abbia i privilegi CREATE e ALTER su
     lotto_statistics.* (vedi GRANT in init.sql)."""
     conn = get_db_connection()
     try:
@@ -309,6 +432,18 @@ def crea_tabelle() -> None:
             conn.commit()
         finally:
             cursor.close()
+
+        try:
+            _migra_colonna_tipo_regolamento(conn)
+        except MySQLError as exc:
+            if exc.errno == 1142:
+                raise ScraperError(
+                    f"L'utente '{DB_CONFIG['user']}' non ha il privilegio "
+                    f"ALTER su '{DB_CONFIG['database']}', necessario per la "
+                    f"migrazione di tipo_regolamento. Aggiungi ALTER al GRANT "
+                    f"in init.sql e rilancia."
+                ) from exc
+            raise
     except MySQLError as exc:
         log.error("Errore database durante la creazione delle tabelle: %s", exc)
         conn.rollback()
@@ -907,10 +1042,14 @@ def _inserisci_superenalotto(conn, estrazione: EstrazioneSuperenalotto) -> int:
     cursor.execute(
         """
         INSERT IGNORE INTO estrazioni_superenalotto
-            (data_estrazione, concorso, n1, n2, n3, n4, n5, n6, jolly, superstar)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            (data_estrazione, concorso, n1, n2, n3, n4, n5, n6, jolly, superstar, tipo_regolamento)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
-        (estrazione.data_estrazione, estrazione.concorso, *estrazione.numeri, estrazione.jolly, estrazione.superstar),
+        (
+            estrazione.data_estrazione, estrazione.concorso, *estrazione.numeri,
+            estrazione.jolly, estrazione.superstar,
+            _determina_tipo_regolamento(estrazione.data_estrazione),
+        ),
     )
     conn.commit()
     inserite = cursor.rowcount
@@ -967,69 +1106,39 @@ def aggiorna_nuove_estrazioni() -> None:
 
 
 # =====================================================================
-# FASE 3-BIS: SUPERENALOTTO DA SISAL.IT CON SELENIUM (storico + live)
+# UTILITY: SELENIUM (disponibile per usi futuri, non richiamata di
+# default da nessun percorso corrente)
 # =====================================================================
 #
-# URL VERIFICATO: https://www.sisal.it/estrazioni/superenalotto/<anno>/<mese>
-# dove <mese> è il NOME del mese in italiano minuscolo (es. 'luglio', non
-# '07'). Esempio reale confermato:
-#   https://www.sisal.it/estrazioni/superenalotto/2025/luglio
-#
-# STRUTTURA DELLA PAGINA (verificata via fetch diretto, non ipotizzata):
-# la pagina elenca tutte le estrazioni del mese; ogni estrazione è
-# racchiusa in un singolo tag <a> il cui href ha il pattern
-#   /estrazioni/superenalotto/concorso-<N>/<gg>-<mese>-<aaaa>
-# e che avvolge la sestina, il Jolly e il SuperStar come testo
-# discendente. Il numero di concorso e la data si leggono quindi
-# direttamente dall'href (più stabile del testo visibile).
-#
-# NOTA: verificato con una fetch HTTP diretta (senza eseguire
-# JavaScript) che il contenuto è già presente nell'HTML — il sito è
-# server-renderizzato (Adobe Experience Manager) almeno per questa
-# pagina archivio. Il timeout osservato con Selenium in produzione è
-# quasi certamente bot-detection specifica sui browser automatizzati
-# (headless Chrome viene fingerprintato), non una protezione generale
-# del sito: una richiesta HTTP "normale" passa senza problemi.
-#
-# Per questo motivo l'HTTP diretto (_fetch, la stessa sessione con
-# retry usata per lottoced.com) è ora il METODO DI DEFAULT. Selenium
-# resta disponibile come fallback opzionale (--selenium sulla CLI o
-# SISAL_USA_SELENIUM=true), nel caso Sisal inizi a bloccare anche le
-# richieste HTTP dirette in futuro. Se l'HTTP diretto continua a
-# funzionare, puoi anche evitare del tutto chromium/chromedriver nel
-# Dockerfile.
+# Sia il backfill storico (FASE 3-ter) sia il live update (FASE 3) del
+# SuperEnalotto usano solo `requests`/BeautifulSoup: lottoced.com si è
+# rivelato server-renderizzato e raggiungibile via HTTP diretto, quindi
+# Selenium non serve più per le fonti attuali. La funzione sotto resta
+# disponibile come utility pronta all'uso se in futuro serve fare lo
+# scraping di un sito che richiede JavaScript: richiamala da una nuova
+# funzione dedicata a quel sito specifico (vedi _attendi_elemento_pagina
+# come esempio di attesa con WebDriverWait).
 # =====================================================================
-
-SISAL_SUPERENALOTTO_BASE_URL = "https://www.sisal.it/estrazioni/superenalotto"
 
 SELENIUM_PAGE_LOAD_TIMEOUT = int(os.environ.get("SELENIUM_PAGE_LOAD_TIMEOUT", "30"))
 SELENIUM_ELEMENT_WAIT_TIMEOUT = int(os.environ.get("SELENIUM_ELEMENT_WAIT_TIMEOUT", "20"))
 
-# Metodo di default per FASE 3-bis: HTTP diretto (False) o Selenium (True).
-# Sovrascrivibile per singola chiamata da CLI (--selenium) o globalmente
-# con la variabile d'ambiente SISAL_USA_SELENIUM=true.
-SISAL_USA_SELENIUM_DEFAULT = os.environ.get("SISAL_USA_SELENIUM", "false").strip().lower() in ("1", "true", "yes")
-
 # Percorsi opzionali: nei container Linux il binario di Chromium e/o
 # chromedriver spesso non sono nel PATH standard di Selenium Manager.
 # Default allineati al pacchetto apt 'chromium'/'chromium-driver' su
-# Debian/Ubuntu (vedi Dockerfile). Sovrascrivi con le variabili
-# d'ambiente CHROME_BIN/CHROMEDRIVER_PATH se la tua immagine li
-# installa in percorsi diversi.
+# Debian/Ubuntu. Sovrascrivi con le variabili d'ambiente CHROME_BIN/
+# CHROMEDRIVER_PATH se la tua immagine li installa in percorsi diversi.
 CHROME_BIN = os.environ.get("CHROME_BIN", "/usr/bin/chromium")
 CHROMEDRIVER_PATH = os.environ.get("CHROMEDRIVER_PATH", "/usr/bin/chromedriver")
-
-_MESI_ITALIANI_INVERSO = {numero: nome for nome, numero in _MESI_ITALIANI.items()}
-
-_HREF_CONCORSO_SISAL_RE = re.compile(
-    r"/estrazioni/superenalotto/concorso-(\d+)/(\d{1,2})-([a-zA-Zàèìòù]+)-(\d{4})"
-)
 
 
 def _init_selenium_driver():
     """Crea un driver Chrome headless con le opzioni corrette per un
     container Linux rootless (Podman + SELinux): niente sandbox del
-    kernel, niente /dev/shm condiviso, niente GPU."""
+    kernel, niente /dev/shm condiviso, niente GPU. Import lazy: se
+    selenium non è installato, solo questa funzione fallisce (con un
+    messaggio chiaro) — il resto dello script resta pienamente
+    utilizzabile."""
     try:
         from selenium import webdriver
         from selenium.webdriver.chrome.options import Options as ChromeOptions
@@ -1039,8 +1148,7 @@ def _init_selenium_driver():
         raise ScraperError(
             "Il pacchetto 'selenium' non è installato: aggiungilo a "
             "requirements.txt ed esegui 'pip install selenium'. Serve "
-            "inoltre chromium + chromedriver nell'immagine del container "
-            "(vedi note nel Dockerfile)."
+            "inoltre chromium + chromedriver nell'immagine del container."
         ) from exc
 
     opzioni = ChromeOptions()
@@ -1064,19 +1172,25 @@ def _init_selenium_driver():
         raise ScraperError(
             f"Impossibile avviare Chrome/chromedriver headless: {exc}. "
             f"Verifica che chromium e chromedriver siano installati "
-            f"nell'immagine (vedi Dockerfile) e che CHROME_BIN/"
-            f"CHROMEDRIVER_PATH puntino ai binari corretti (attuali: "
-            f"CHROME_BIN='{CHROME_BIN}', CHROMEDRIVER_PATH='{CHROMEDRIVER_PATH}')."
+            f"nell'immagine e che CHROME_BIN/CHROMEDRIVER_PATH puntino ai "
+            f"binari corretti (attuali: CHROME_BIN='{CHROME_BIN}', "
+            f"CHROMEDRIVER_PATH='{CHROMEDRIVER_PATH}')."
         ) from exc
 
     driver.set_page_load_timeout(SELENIUM_PAGE_LOAD_TIMEOUT)
     return driver
 
 
-def _attendi_caricamento_e_ottieni_html(driver, url: str) -> str:
-    """Naviga all'URL e attende (WebDriverWait) che almeno una scheda-
-    estrazione sia presente nel DOM prima di restituire il page_source
-    da passare a BeautifulSoup."""
+def _attendi_elemento_pagina(driver, url: str, selettore_css: str):
+    """Naviga all'URL e attende (WebDriverWait) che il selettore CSS
+    indicato sia presente nel DOM prima di restituire driver.page_source.
+    Esempio di utilizzo per una futura fonte JS-dipendente:
+        driver = _init_selenium_driver()
+        try:
+            html = _attendi_elemento_pagina(driver, url, "a.scheda-estrazione")
+        finally:
+            driver.quit()
+    """
     from selenium.webdriver.common.by import By
     from selenium.webdriver.support.ui import WebDriverWait
     from selenium.webdriver.support import expected_conditions as EC
@@ -1085,16 +1199,12 @@ def _attendi_caricamento_e_ottieni_html(driver, url: str) -> str:
     try:
         driver.get(url)
         WebDriverWait(driver, SELENIUM_ELEMENT_WAIT_TIMEOUT).until(
-            EC.presence_of_element_located(
-                (By.CSS_SELECTOR, "a[href*='/estrazioni/superenalotto/concorso-']")
-            )
+            EC.presence_of_element_located((By.CSS_SELECTOR, selettore_css))
         )
     except TimeoutException as exc:
         raise ScraperNetworkError(
-            f"Timeout Selenium: nessuna scheda di estrazione apparsa entro "
-            f"{SELENIUM_ELEMENT_WAIT_TIMEOUT}s per {url}. La pagina "
-            f"potrebbe aver cambiato struttura, essere vuota (mese senza "
-            f"estrazioni) o il sito potrebbe essere lento/irraggiungibile."
+            f"Timeout Selenium: elemento '{selettore_css}' non apparso entro "
+            f"{SELENIUM_ELEMENT_WAIT_TIMEOUT}s per {url}."
         ) from exc
     except WebDriverException as exc:
         raise ScraperNetworkError(f"Errore Selenium durante il caricamento di {url}: {exc}") from exc
@@ -1102,187 +1212,199 @@ def _attendi_caricamento_e_ottieni_html(driver, url: str) -> str:
     return driver.page_source
 
 
-def _costruisci_url_archivio_mensile_sisal(anno: int, mese: int) -> str:
-    nome_mese = _MESI_ITALIANI_INVERSO.get(mese)
-    if nome_mese is None:
-        raise ValueError(f"Mese non valido: {mese} (atteso 1-12)")
-    return f"{SISAL_SUPERENALOTTO_BASE_URL}/{anno}/{nome_mese}"
+# =====================================================================
+# FASE 3-TER: STORICO SUPERENALOTTO DA LOTTOCED.COM (HTTP DIRETTO)
+# =====================================================================
+#
+# URL VERIFICATO: https://www.lottoced.com/superenalotto/estrazioni/?anno=<anno>
+# — stesso dominio già usato per lo scraping "nuove estrazioni" in FASE 3,
+# quindi già raggiungibile da questo ambiente senza Selenium. Pagina
+# server-renderizzata, tabella semplice con una riga per estrazione:
+#   - data nell'href in formato ISO: estrazione_super=AAAA-MM-GG
+#   - numeri come stringhe punteggiate: "03.16.30.53.55.79."
+#   - Jolly e SuperStar nello stesso formato (SuperStar vuoto per i
+#     concorsi antecedenti la sua introduzione, coerentemente con
+#     l'era 'SIMULATO'/'LOTTO' iniziale)
+#
+# NOTA: questa pagina non riporta il numero di concorso. Viene dedotto
+# numerando in ordine cronologico crescente ENTRO ciascun anno (prima
+# estrazione dell'anno = concorso 1) da _assegna_concorsi_sequenziali_annuali.
+# Resta un'euristica: se l'elenco di un anno risulta incompleto sul
+# sito, i numeri di concorso dedotti saranno scorretti per quell'anno.
+# =====================================================================
+
+LOTTOCED_SUPERENALOTTO_ARCHIVIO_URL = "https://www.lottoced.com/superenalotto/estrazioni/"
+
+_HREF_DATA_LOTTOCED_RE = re.compile(r"estrazione_super=(\d{4}-\d{2}-\d{2})")
 
 
-def _parse_archivio_mensile_sisal_html(html: str) -> list:
+def _costruisci_url_archivio_annuale_lottoced(anno: int) -> str:
+    return f"{LOTTOCED_SUPERENALOTTO_ARCHIVIO_URL}?anno={anno}"
+
+
+def _parse_archivio_annuale_lottoced_html(html: str) -> list:
     """
-    Analizza la pagina archivio mensile di Sisal. Ogni estrazione è un
-    tag <a href="/estrazioni/superenalotto/concorso-<N>/<gg>-<mese>-<aaaa>">
-    che avvolge sestina, Jolly e SuperStar come testo discendente.
+    Analizza l'archivio annuale di lottoced.com. Per ogni riga legge la
+    data dall'href del link (formato ISO) e cerca nelle celle della
+    stessa <tr> i gruppi di cifre punteggiate: il primo gruppo è la
+    sestina, il secondo il Jolly, il terzo (se presente) il SuperStar.
+    Non fornisce il numero di concorso (dedotto a valle). Ritorna tuple
+    grezze (data_estrazione, numeri, jolly, superstar).
 
-    # TODO: se Sisal cambia il markup, questa è la funzione da
-    # aggiornare (ispezionare il sorgente live della pagina archivio).
+    # TODO: se lottoced.com cambia il markup, aggiornare qui.
     """
     soup = BeautifulSoup(html, "html.parser")
-    schede = soup.find_all("a", href=_HREF_CONCORSO_SISAL_RE)
+    link_data = soup.find_all("a", href=_HREF_DATA_LOTTOCED_RE)
 
-    if not schede:
+    if not link_data:
         raise ScraperParsingError(
-            "Nessuna scheda di estrazione trovata nell'archivio Sisal: "
-            "la struttura potrebbe essere cambiata (aggiornare "
-            "_parse_archivio_mensile_sisal_html), oppure il mese richiesto "
-            "non ha ancora estrazioni disponibili."
+            "Nessuna estrazione trovata nell'archivio lottoced.com: la "
+            "struttura potrebbe essere cambiata (aggiornare "
+            "_parse_archivio_annuale_lottoced_html), oppure l'anno "
+            "richiesto non ha estrazioni disponibili."
         )
 
-    estrazioni = []
-    for scheda in schede:
-        m = _HREF_CONCORSO_SISAL_RE.search(scheda.get("href", ""))
+    righe = []
+    for link in link_data:
+        m = _HREF_DATA_LOTTOCED_RE.search(link.get("href", ""))
         if not m:
             continue
-
-        concorso = int(m.group(1))
-        giorno = int(m.group(2))
-        mese_nome = m.group(3).lower()
-        anno = int(m.group(4))
-        mese = _MESI_ITALIANI.get(mese_nome)
-        if mese is None:
-            log.warning("Mese '%s' non riconosciuto nell'href della scheda concorso %d, scartata.", mese_nome, concorso)
-            continue
         try:
-            data_estrazione = date(anno, mese, giorno)
+            data_estrazione = datetime.strptime(m.group(1), "%Y-%m-%d").date()
         except ValueError:
-            log.warning("Data non valida per il concorso %d (%s-%s-%s), scheda scartata.", concorso, giorno, mese_nome, anno)
+            log.warning("Data non valida nell'href '%s', riga scartata.", link.get("href"))
             continue
 
-        # Estrae in sequenza sestina, Jolly e SuperStar dal testo
-        # discendente della scheda, indipendentemente dai tag esatti
-        # usati (li/div/span): i primi 6 token numerici sono la sestina,
-        # poi si cercano le etichette "Jolly"/"SuperStar" seguite dal
-        # rispettivo valore numerico.
-        pezzi = list(scheda.stripped_strings)
-        numeri, jolly, superstar = [], None, None
-        i = 0
-        while i < len(pezzi) and len(numeri) < 6:
-            if pezzi[i].strip().isdigit():
-                numeri.append(int(pezzi[i]))
-            i += 1
-        while i < len(pezzi):
-            etichetta = pezzi[i].strip().lower()
-            if "jolly" in etichetta and i + 1 < len(pezzi) and pezzi[i + 1].strip().isdigit():
-                jolly = int(pezzi[i + 1])
-                i += 2
-                continue
-            if "superstar" in etichetta and i + 1 < len(pezzi) and pezzi[i + 1].strip().isdigit():
-                superstar = int(pezzi[i + 1])
-                i += 2
-                continue
-            i += 1
+        riga_tr = link.find_parent("tr")
+        if riga_tr is None:
+            log.warning("Riga <tr> non trovata per la data %s, scartata.", data_estrazione)
+            continue
 
-        if len(numeri) != 6 or jolly is None:
+        celle = [c.get_text(strip=True) for c in riga_tr.find_all("td")]
+        # Isola solo le celle che contengono gruppi di cifre punteggiate
+        # (es. "03.16.30.53.55.79."), ignorando celle vuote/spaziatrici.
+        gruppi_numerici = [c for c in celle if re.fullmatch(r"(\d{1,2}\.)+", c)]
+
+        if len(gruppi_numerici) < 2:
+            log.warning("Dati numerici insufficienti per il %s, riga scartata: %s", data_estrazione, celle)
+            continue
+
+        numeri = [int(x) for x in gruppi_numerici[0].split(".") if x]
+        if len(numeri) != 6:
             log.warning(
-                "Concorso %d (%s) scartato: dati incompleti (numeri=%s, jolly=%s, superstar=%s).",
-                concorso, data_estrazione, numeri, jolly, superstar,
+                "Attesi 6 numeri nella sestina del %s, trovati %d, riga scartata: %s",
+                data_estrazione, len(numeri), gruppi_numerici[0],
             )
             continue
 
-        estrazioni.append(EstrazioneSuperenalotto(
-            data_estrazione=data_estrazione,
-            concorso=concorso,
-            numeri=numeri,
-            jolly=jolly,
-            superstar=superstar,
-        ))
+        jolly = int(gruppi_numerici[1].rstrip("."))
+        superstar = int(gruppi_numerici[2].rstrip(".")) if len(gruppi_numerici) > 2 else None
 
-    return estrazioni
+        righe.append((data_estrazione, numeri, jolly, superstar))
+
+    return righe
 
 
-def scarica_estrazioni_superenalotto_sisal(anno: int, mese: int, usa_selenium: Optional[bool] = None) -> list:
+def _assegna_concorsi_sequenziali_annuali(righe: list, anno: int) -> list:
+    """Numera sequenzialmente (1, 2, 3, ...) le estrazioni di un anno in
+    ordine cronologico crescente, dato che lottoced.com non riporta il
+    concorso, e calcola tipo_regolamento per ciascuna. Segnala nei log
+    un conteggio anomalo (indicativamente 100-300 estrazioni/anno a
+    seconda dell'epoca) come possibile sintomo di un elenco incompleto."""
+    righe_ordinate = sorted(righe, key=lambda r: r[0])
+    if righe_ordinate and not (100 <= len(righe_ordinate) <= 300):
+        log.warning(
+            "Anno %d: trovate %d estrazioni (atteso indicativamente "
+            "100-300/anno secondo l'epoca). Verifica che l'elenco sia "
+            "completo prima di fidarti dei numeri di concorso dedotti.",
+            anno, len(righe_ordinate),
+        )
+    return [
+        EstrazioneSuperenalotto(data_estrazione=data, concorso=i, numeri=numeri, jolly=jolly, superstar=superstar)
+        for i, (data, numeri, jolly, superstar) in enumerate(righe_ordinate, start=1)
+    ]
+
+
+def scarica_estrazioni_superenalotto_lottoced_anno(anno: int) -> list:
     """Scarica ed effettua il parsing di TUTTE le estrazioni SuperEnalotto
-    di un mese dall'archivio ufficiale Sisal.
-
-    usa_selenium=None (default) -> usa SISAL_USA_SELENIUM_DEFAULT (HTTP
-    diretto salvo diversa configurazione). Passare True per forzare
-    Selenium per questa chiamata, False per forzare l'HTTP diretto."""
-    if usa_selenium is None:
-        usa_selenium = SISAL_USA_SELENIUM_DEFAULT
-
-    url = _costruisci_url_archivio_mensile_sisal(anno, mese)
-    log.info("Sisal: carico %s (metodo: %s) ...", url, "Selenium" if usa_selenium else "HTTP diretto")
-
-    if usa_selenium:
-        driver = _init_selenium_driver()
-        try:
-            html = _attendi_caricamento_e_ottieni_html(driver, url)
-        finally:
-            driver.quit()
-    else:
-        html = _fetch(url)
-
-    estrazioni = _parse_archivio_mensile_sisal_html(html)
-    log.info("Sisal: %d estrazioni trovate per %04d-%02d.", len(estrazioni), anno, mese)
+    di un anno dall'archivio di lottoced.com via HTTP diretto (nessun
+    bisogno di Selenium: pagina verificata server-renderizzata)."""
+    url = _costruisci_url_archivio_annuale_lottoced(anno)
+    log.info("lottoced.com: carico %s ...", url)
+    html = _fetch(url)
+    righe_grezze = _parse_archivio_annuale_lottoced_html(html)
+    estrazioni = _assegna_concorsi_sequenziali_annuali(righe_grezze, anno)
+    log.info("lottoced.com: %d estrazioni trovate per l'anno %d.", len(estrazioni), anno)
     return estrazioni
 
 
-def _upsert_superenalotto(conn, estrazioni: list) -> tuple:
-    """Insert/update idempotente sul vincolo UNIQUE(data_estrazione,
-    concorso) tramite ON DUPLICATE KEY UPDATE. Ritorna (inserite,
-    aggiornate): con mysql-connector, cursor.rowcount vale 1 per un
-    INSERT puro e 2 quando ON DUPLICATE KEY UPDATE ha effettivamente
-    aggiornato una riga preesistente."""
+def _upsert_superenalotto_batch(conn, estrazioni: list, batch_size: int = IMPORT_BATCH_SIZE) -> int:
+    """Insert/update in batch (ON DUPLICATE KEY UPDATE) sul vincolo
+    UNIQUE(data_estrazione, concorso), pensato per volumi grandi come il
+    backfill storico completo. tipo_regolamento viene calcolato riga per
+    riga da _determina_tipo_regolamento(). Ritorna il numero totale di
+    righe elaborate (insert+update aggregati: in batch non si distingue
+    in modo granulare l'uno dall'altro, a differenza dell'upsert singolo
+    usato in FASE 3 live)."""
     if not estrazioni:
-        return (0, 0)
+        return 0
 
     query = """
         INSERT INTO estrazioni_superenalotto
-            (data_estrazione, concorso, n1, n2, n3, n4, n5, n6, jolly, superstar)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            (data_estrazione, concorso, n1, n2, n3, n4, n5, n6, jolly, superstar, tipo_regolamento)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON DUPLICATE KEY UPDATE
             n1 = VALUES(n1), n2 = VALUES(n2), n3 = VALUES(n3),
             n4 = VALUES(n4), n5 = VALUES(n5), n6 = VALUES(n6),
-            jolly = VALUES(jolly), superstar = VALUES(superstar)
+            jolly = VALUES(jolly), superstar = VALUES(superstar),
+            tipo_regolamento = VALUES(tipo_regolamento)
     """
     cursor = conn.cursor()
-    inserite = aggiornate = 0
+    totale_elaborate = 0
     try:
-        for e in estrazioni:
-            cursor.execute(query, (e.data_estrazione, e.concorso, *e.numeri, e.jolly, e.superstar))
-            if cursor.rowcount == 1:
-                inserite += 1
-            elif cursor.rowcount == 2:
-                aggiornate += 1
-        conn.commit()
+        for i in range(0, len(estrazioni), batch_size):
+            chunk = estrazioni[i:i + batch_size]
+            righe = [
+                (
+                    e.data_estrazione, e.concorso, *e.numeri, e.jolly, e.superstar,
+                    _determina_tipo_regolamento(e.data_estrazione),
+                )
+                for e in chunk
+            ]
+            cursor.executemany(query, righe)
+            conn.commit()
+            totale_elaborate += len(chunk)
+            if len(estrazioni) > batch_size:
+                log.info("Upsert SuperEnalotto: %d/%d righe elaborate finora...", totale_elaborate, len(estrazioni))
     finally:
         cursor.close()
-    return (inserite, aggiornate)
+    return totale_elaborate
 
 
-def aggiorna_superenalotto_da_sisal(anno: Optional[int] = None, mese: Optional[int] = None, usa_selenium: Optional[bool] = None) -> None:
-    """Punto d'ingresso FASE 3-bis.
-    - anno e mese specificati  -> scarica solo quel mese.
-    - solo anno specificato    -> scarica tutti i 12 mesi di quell'anno (storico).
-    - nessuno dei due          -> scarica il mese corrente (nuove estrazioni).
-    usa_selenium: None = usa il default (SISAL_USA_SELENIUM_DEFAULT, HTTP
-    diretto salvo configurazione diversa); True/False forza il metodo."""
-    oggi = date.today()
-    if anno is not None and mese is not None:
-        mesi_da_scaricare = [(anno, mese)]
-    elif anno is not None:
-        mesi_da_scaricare = [(anno, m) for m in range(1, 13)]
-    else:
-        mesi_da_scaricare = [(oggi.year, oggi.month)]
-
+def aggiorna_superenalotto_storico_lottoced(anno_inizio: int = 1997, anno_fine: Optional[int] = None,
+                                             pausa_tra_richieste: float = 1.0) -> None:
+    """Punto d'ingresso FASE 3-ter: backfill storico completo del
+    SuperEnalotto da lottoced.com, anno per anno, con upsert in batch
+    (idempotente). anno_fine di default è l'anno corrente.
+    pausa_tra_richieste (secondi) distanzia le richieste tra un anno e
+    l'altro per non martellare il sito."""
+    anno_fine = anno_fine or date.today().year
     conn = get_db_connection()
     try:
-        for anno_corrente, mese_corrente in mesi_da_scaricare:
+        for anno in range(anno_inizio, anno_fine + 1):
             try:
-                estrazioni = scarica_estrazioni_superenalotto_sisal(anno_corrente, mese_corrente, usa_selenium=usa_selenium)
+                estrazioni = scarica_estrazioni_superenalotto_lottoced_anno(anno)
             except ScraperError as exc:
-                log.error("Sisal %04d-%02d: recupero fallito, salto al mese successivo. %s", anno_corrente, mese_corrente, exc)
+                log.error("lottoced.com %d: recupero fallito, salto all'anno successivo. %s", anno, exc)
                 continue
             try:
-                inserite, aggiornate = _upsert_superenalotto(conn, estrazioni)
-                log.info(
-                    "Sisal %04d-%02d: %d nuove, %d aggiornate (%d estrazioni trovate in pagina).",
-                    anno_corrente, mese_corrente, inserite, aggiornate, len(estrazioni),
-                )
+                n = _upsert_superenalotto_batch(conn, estrazioni)
+                log.info("lottoced.com %d: %d righe elaborate (insert+update) su %d trovate.", anno, n, len(estrazioni))
             except MySQLError as exc:
-                log.error("Sisal %04d-%02d: errore database durante l'upsert: %s", anno_corrente, mese_corrente, exc)
+                log.error("lottoced.com %d: errore database durante l'upsert: %s", anno, exc)
                 conn.rollback()
+            if anno < anno_fine:
+                time.sleep(pausa_tra_richieste)
     finally:
         conn.close()
 
@@ -1299,30 +1421,19 @@ def main() -> None:
     parser.add_argument("--storico", action="store_true", help="Esegue solo la FASE 2 (import storico.txt).")
     parser.add_argument("--nuove", action="store_true", help="Esegue solo la FASE 3 (nuove estrazioni via web/API).")
     parser.add_argument(
-        "--superenalotto-sisal", action="store_true",
-        help="Scarica il SuperEnalotto dall'archivio ufficiale Sisal via Selenium (FASE 3-bis).",
+        "--superenalotto-storico-lottoced", action="store_true",
+        help="Backfill storico completo del SuperEnalotto da lottoced.com via HTTP diretto (FASE 3-ter).",
     )
-    parser.add_argument("--anno", type=int, help="Anno per --superenalotto-sisal (default: anno corrente).")
-    parser.add_argument("--mese", type=int, choices=range(1, 13),
-                         help="Mese 1-12 per --superenalotto-sisal. Se omesso con --anno, scarica tutti i 12 mesi.")
-    parser.add_argument(
-        "--selenium", action="store_true",
-        help="Forza Selenium invece dell'HTTP diretto per --superenalotto-sisal "
-             "(di default si usa l'HTTP diretto: più leggero e, empiricamente, meno "
-             "soggetto a bot-detection rispetto a un browser headless).",
-    )
+    parser.add_argument("--dal-anno", type=int, default=1997,
+                         help="Anno di inizio per --superenalotto-storico-lottoced (default: 1997).")
+    parser.add_argument("--al-anno", type=int,
+                         help="Anno di fine per --superenalotto-storico-lottoced (default: anno corrente).")
     args = parser.parse_args()
 
-    if args.mese is not None and args.anno is None:
-        parser.error("--mese richiede anche --anno.")
-
-    if args.superenalotto_sisal:
-        log.info("=== FASE 3-bis: SuperEnalotto da Sisal ===")
+    if args.superenalotto_storico_lottoced:
+        log.info("=== FASE 3-ter: storico SuperEnalotto da lottoced.com ===")
         crea_tabelle()
-        aggiorna_superenalotto_da_sisal(
-            anno=args.anno, mese=args.mese,
-            usa_selenium=True if args.selenium else None,
-        )
+        aggiorna_superenalotto_storico_lottoced(anno_inizio=args.dal_anno, anno_fine=args.al_anno)
         return
 
     solo_una_fase = args.setup or args.storico or args.nuove
