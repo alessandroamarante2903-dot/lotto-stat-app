@@ -1,4 +1,6 @@
 {
     "github.gitProtocol": "ssh",
-    "podmanager.composeCommandStyle": "podman-compose"
+    "podmanager.composeCommandStyle": "podman-compose",
+    "msg.sql.rowPacketSize": 100000,
+    "claudeCode.useTerminal": true
 }
