@@ -1,0 +1,11 @@
+# Streamlit non usa uvicorn (ha un server proprio): il "runtime reload"
+# qui è questo, non un flag da riga di comando come --reload di uvicorn.
+# runOnSave = true fa sì che una modifica a un file .py montato (vedi
+# volumi di lotto_stat_web in podman-compose.yml) faccia ripartire da
+# sola la UI, senza il prompt manuale "Source file changed - Rerun".
+[server]
+runOnSave = true
+fileWatcherType = "auto"
+
+[browser]
+gatherUsageStats = false
