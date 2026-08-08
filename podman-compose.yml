@@ -1,0 +1,156 @@
+version: "3.8"
+
+# =====================================================================
+# podman-compose.yml — architettura a 5 container per lotto-stat-app
+#
+#   lotto_stat_proxy   (nginx)      -> porta d'ingresso unica  :80
+#   lotto_stat_web     (streamlit)  -> dashboard + calcolatore + pannello scraper
+#   lotto_stat_backend (fastapi)    -> API HTTP (backend/main.py) su :8000, hot-reload
+#   lotto_stat_grafana (grafana)    -> analytics avanzate su MySQL
+#   lotto_stat_db      (mysql 8.0)  -> dati storici + viste/cache statistiche
+#
+# Uso (Podman rootless):
+#   cp .env.example .env   # poi valorizza le password
+#   podman-compose up -d
+#
+# NOTA: lotto_stat_backend ora esiste davvero (backend/main.py, prima
+# assente: il vecchio docker-compose.yml lanciava "uvicorn main:app" a
+# vuoto). È un livello API separato da lotto_stat_web (Streamlit): lo
+# scraper (backend/scraper.py) resta invocabile da ENTRAMBI, montato in
+# entrambi i container, ognuno tramite scraper/update_pipeline.py.
+# =====================================================================
+
+networks:
+  lotto_stat_net:
+    driver: bridge
+
+volumes:
+  db_data:
+  grafana_data:
+
+services:
+
+  db:
+    image: docker.io/library/mysql:8.0
+    container_name: lotto_stat_db
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Imposta MYSQL_ROOT_PASSWORD nel file .env}
+      MYSQL_DATABASE: ${DB_NAME:-lotto_statistics}
+    volumes:
+      - ./db/init-scripts:/docker-entrypoint-initdb.d:Z
+      - db_data:/var/lib/mysql:Z
+    ports:
+      - "3306:3306"
+    networks:
+      - lotto_stat_net
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    container_name: lotto_stat_web
+    restart: unless-stopped
+    environment:
+      DB_HOST: db
+      DB_PORT: "3306"
+      DB_NAME: ${DB_NAME:-lotto_statistics}
+      DB_USER: ${DB_USER:-statistics_user}
+      DB_PASSWORD: ${DB_PASSWORD:?Imposta DB_PASSWORD nel file .env}
+      STORICO_TXT_PATH: /app/db/storici/storico.txt
+      RAPIDAPI_KEY: ${RAPIDAPI_KEY:-}
+      MAGAYO_API_KEY: ${MAGAYO_API_KEY:-}
+      MAGAYO_GAME_CODE: ${MAGAYO_GAME_CODE:-italy_superenalotto}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - ./web:/app:Z
+      - ./scraper:/app/scraper:Z
+      - ./backend:/app/backend:Z
+      - ./db/storici:/app/db/storici:Z
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - lotto_stat_net
+    expose:
+      - "8501"
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: lotto_stat_backend
+    restart: unless-stopped
+    environment:
+      DB_HOST: db
+      DB_PORT: "3306"
+      DB_NAME: ${DB_NAME:-lotto_statistics}
+      DB_USER: ${DB_USER:-statistics_user}
+      DB_PASSWORD: ${DB_PASSWORD:?Imposta DB_PASSWORD nel file .env}
+      STORICO_TXT_PATH: /app/db/storici/storico.txt
+      RAPIDAPI_KEY: ${RAPIDAPI_KEY:-}
+      MAGAYO_API_KEY: ${MAGAYO_API_KEY:-}
+      MAGAYO_GAME_CODE: ${MAGAYO_GAME_CODE:-italy_superenalotto}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      # Stesso layout di lotto_stat_web (backend/ e scraper/ sibling
+      # sotto /app): --reload di uvicorn osserva questi file montati e
+      # riavvia da solo ad ogni modifica, senza rebuild dell'immagine.
+      - ./backend:/app/backend:Z
+      - ./scraper:/app/scraper:Z
+      - ./db/storici:/app/db/storici:Z
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - lotto_stat_net
+    ports:
+      - "8000:8000"   # esposizione diretta utile in sviluppo/debug; raggiungibile anche via proxy su /api/
+
+  grafana:
+    image: docker.io/grafana/grafana:latest
+    container_name: lotto_stat_grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Imposta GRAFANA_ADMIN_PASSWORD nel file .env}
+      GF_SERVER_ROOT_URL: "%(protocol)s://%(domain)s/grafana/"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      DB_HOST: db
+      DB_PORT: "3306"
+      DB_NAME: ${DB_NAME:-lotto_statistics}
+      DB_USER: ${DB_USER:-statistics_user}
+      DB_PASSWORD: ${DB_PASSWORD:?Imposta DB_PASSWORD nel file .env}
+    volumes:
+      - grafana_data:/var/lib/grafana:Z
+      - ./grafana/provisioning:/etc/grafana/provisioning:Z,ro
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - lotto_stat_net
+    expose:
+      - "3000"
+
+  proxy:
+    image: docker.io/library/nginx:1.27-alpine
+    container_name: lotto_stat_proxy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      # - "443:443"   # predisposto per HTTPS: monta qui i certificati e
+                       # aggiungi un server block TLS in nginx/nginx.conf
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro,Z
+    depends_on:
+      - web
+      - backend
+      - grafana
+    networks:
+      - lotto_stat_net
