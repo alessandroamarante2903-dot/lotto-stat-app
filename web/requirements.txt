@@ -4,6 +4,25 @@ pandas==2.2.2
 plotly==5.24.1
 watchdog==4.0.2   # file watcher nativo per .streamlit/config.toml (runOnSave), niente polling lento
 
+# numpy/pyarrow pinnati esplicitamente: SIGSEGV riprodotto e isolato in
+# pratica (streaming.testing.v1.AppTest, poi confermato causa reale del
+# crash di lotto_stat_web durante la navigazione utente) in st.dataframe()
+# al SECONDO rerun di una pagina, anche con un DataFrame statico senza
+# alcuna colonna proveniente dal DB — crash riproducibile al 100%, non
+# intermittente. Causa: senza pin espliciti, pip risolveva numpy 2.4.6 +
+# pyarrow 25.0.0 (dipendenze transitive di streamlit/pandas, prese alla
+# versione più recente disponibile al momento della build), entrambe
+# molto più recenti di quanto streamlit==1.38.0/pandas==2.2.2 (rilasciate
+# a metà 2024) siano mai state testate contro — ABI mismatch nel percorso
+# di serializzazione Arrow (pandas -> pyarrow -> Arrow IPC) usato da
+# st.dataframe(). Pinnati qui a versioni coeve a streamlit 1.38.0/pandas
+# 2.2.2: numpy 1.26.4 evita del tutto la transizione ABI di numpy 2.0,
+# pyarrow 17.0.0 è la stessa era. Verificato: stesso identico test di
+# riproduzione (rerun ripetuti con st.dataframe) NON crasha più con
+# queste versioni.
+numpy==1.26.4
+pyarrow==17.0.0
+
 # --- Database (condivisa con backend/scraper.py, riusato da scraper/update_pipeline.py) ---
 mysql-connector-python==8.0.33
 
