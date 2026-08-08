@@ -26,7 +26,11 @@ import db
 st.set_page_config(page_title="Lotto & SuperEnalotto — Statistiche", page_icon="🎱", layout="wide")
 
 UPDATE_PIPELINE_PATH = Path(__file__).resolve().parent / "scraper" / "update_pipeline.py"
-TIMEOUT_PIPELINE_SECONDI = 180
+# Misurato in pratica su storico reale (Lotto dal 1939 + SuperEnalotto):
+# CALL sp_refresh_tutte_le_cache() da solo impiega ~4 minuti (237s), prima
+# ancora di considerare lo scraping stesso. 180s andava in timeout anche a
+# refresh riuscito. Margine ampio perché la durata cresce con lo storico.
+TIMEOUT_PIPELINE_SECONDI = 600
 
 st.title("🎱 Lotto & SuperEnalotto — Statistiche")
 
@@ -50,7 +54,7 @@ with tab_statistiche:
         df_ritardo = db.query_df(
             """
             SELECT numero, ritardo_attuale, ritardo_storico_max, indice_convenienza
-            FROM v_lotto_indice_convenienza
+            FROM cache_lotto_ritardo
             WHERE ruota = %s
             ORDER BY ritardo_attuale DESC
             LIMIT %s
@@ -58,7 +62,10 @@ with tab_statistiche:
             (ruota, top_n),
         )
         if df_ritardo.empty:
-            st.info("Nessun dato disponibile: verifica che lo storico sia stato importato (Tab 'Gestione Scraper').")
+            st.info(
+                "Nessun dato disponibile: verifica che lo storico sia stato importato e che la cache "
+                "ritardi sia stata popolata (Tab 'Gestione Scraper' → refresh cache)."
+            )
         else:
             st.plotly_chart(
                 px.bar(
@@ -74,7 +81,7 @@ with tab_statistiche:
         df_freq = db.query_df(
             """
             SELECT numero, frequenza, frequenza_relativa
-            FROM v_lotto_frequenza_ruota
+            FROM cache_lotto_frequenza
             WHERE ruota = %s
             ORDER BY frequenza DESC
             LIMIT %s

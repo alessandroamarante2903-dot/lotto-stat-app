@@ -342,7 +342,14 @@ SELECT
     FLOOR(somma / 20) * 20 + 19 AS fascia_somma_a,
     COUNT(*) AS frequenza
 FROM v_sen_somma_sestina
-GROUP BY tipo_regolamento, FLOOR(somma / 20);
+-- GROUP BY deve ripetere le stesse espressioni del SELECT parola per
+-- parola: con sql_mode=only_full_group_by (default MySQL 8) raggruppare
+-- solo su FLOOR(somma/20) non basta a rendere valide le colonne SELECT
+-- "FLOOR(somma/20)*20" e "FLOOR(somma/20)*20+19", perché MySQL verifica
+-- l'identità sintattica dell'espressione, non la dipendenza funzionale
+-- (errore reale riscontrato: 1055 "Expression #2 of SELECT list is not
+-- in GROUP BY clause").
+GROUP BY tipo_regolamento, FLOOR(somma / 20) * 20, FLOOR(somma / 20) * 20 + 19;
 
 CREATE OR REPLACE VIEW v_sen_somma_statistiche AS
 SELECT

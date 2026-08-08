@@ -26,7 +26,20 @@ DB_CONFIG = {
     "password": os.environ.get("DB_PASSWORD", "CHANGE_ME_STRONG_PASSWORD"),
 }
 
-_pool = pooling.MySQLConnectionPool(pool_name="lotto_api_pool", pool_size=5, **DB_CONFIG)
+# autocommit=True per ogni connessione del pool: per difesa in profondità,
+# non ci si affida al solo reset implicito del pool (pool_reset_session,
+# di default True, fa ROLLBACK alla restituzione) — vedi il bug reale
+# documentato in web/db.py, causato esattamente da una connessione con
+# autocommit=False (default di mysql-connector-python) mai committata.
+#
+# use_pure=True: lotto_stat_web si riavviava da solo con exit code 134
+# (SIGABRT dall'estensione C _mysql_connector, non un'eccezione Python —
+# vedi indagine in web/db.py/CLAUDE.md). uvicorn esegue gli endpoint sync
+# in un threadpool: più connessioni C create/usate da thread diversi è
+# esattamente lo scenario in cui quell'estensione è nota per essere
+# fragile, quindi lo stesso fix va applicato qui per difesa, anche se
+# backend non ha (ancora) mostrato il crash.
+_pool = pooling.MySQLConnectionPool(pool_name="lotto_api_pool", pool_size=5, autocommit=True, use_pure=True, **DB_CONFIG)
 
 
 def query(sql: str, params: Optional[tuple] = None) -> list[dict]:

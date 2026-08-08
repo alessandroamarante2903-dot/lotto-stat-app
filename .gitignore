@@ -3,6 +3,9 @@ backend/.venv/
 __pycache__/
 *.pyc
 
+# Escludi le credenziali reali dello stack (vedi .env.example per il template)
+.env
+
 # Escludi eventuali file di dati locali o temporanei
 db/storici/*.csv 
 db/storici/*.txt

@@ -88,7 +88,7 @@ def lotto_ritardatari(
     return db.query(
         """
         SELECT numero, ritardo_attuale, ritardo_storico_max, indice_convenienza
-        FROM v_lotto_indice_convenienza
+        FROM cache_lotto_ritardo
         WHERE ruota = %s
         ORDER BY ritardo_attuale DESC
         LIMIT %s
@@ -106,7 +106,7 @@ def lotto_frequenze(
     return db.query(
         """
         SELECT numero, frequenza, frequenza_relativa
-        FROM v_lotto_frequenza_ruota
+        FROM cache_lotto_frequenza
         WHERE ruota = %s
         ORDER BY frequenza DESC
         LIMIT %s

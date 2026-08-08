@@ -57,6 +57,19 @@ services:
       dockerfile: Dockerfile
     container_name: lotto_stat_web
     restart: unless-stopped
+    # Limite di memoria esplicito: riscontrato in pratica che senza un
+    # cgroup limit, sotto pressione di memoria/swap dell'HOST (non del
+    # container: qui l'uso reale è ~130MB) il processo va in crash nativo
+    # imprevedibile (SIGABRT una volta, SIGSEGV un'altra — sintomo di
+    # malloc che fallisce/corrompe in punti diversi del codice C di
+    # numpy/pandas/plotly/mysql-connector, non un bug applicativo
+    # specifico). Un mem_limit non risolve la pressione a livello host
+    # (quella resta un problema di risorse della macchina, non di questo
+    # progetto), ma se QUESTO container arriva a consumare troppo, fa sì
+    # che il kernel lo termini in modo pulito (OOM-kill, SIGKILL, exit 137)
+    # invece di lasciarlo corrompere memoria in modi diversi ogni volta.
+    mem_limit: 1g
+    memswap_limit: 1g
     environment:
       DB_HOST: db
       DB_PORT: "3306"
@@ -70,9 +83,25 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     volumes:
       - ./web:/app:Z
-      - ./scraper:/app/scraper:Z
-      - ./backend:/app/backend:Z
-      - ./db/storici:/app/db/storici:Z
+      # :z minuscola (non :Z) perché ./scraper, ./backend e ./db/storici
+      # sono montati anche dentro lotto_stat_backend: con :Z (label SELinux
+      # privata) l'ultimo container che parte si prende l'accesso esclusivo
+      # e l'altro va in "Permission denied" (riscontrato in pratica: :z
+      # marca il path come condiviso fra più container, senza escluderli
+      # a vicenda).
+      - ./scraper:/app/scraper:z
+      - ./backend:/app/backend:z
+      - ./db/storici:/app/db/storici:z
+      # Volumi "anonimi" che MASCHERANO backend/.venv e i __pycache__
+      # dentro il container: ./backend porta con sé anche il venv locale
+      # usato per sviluppare/testare fuori da Podman, che qui non serve
+      # (l'immagine ha già le sue dipendenze pip) ed è enorme (decine di
+      # migliaia di file). Un volume anonimo montato su un sottopercorso
+      # DOPO il bind mount del genitore nasconde il contenuto host in
+      # quel punto, senza toccare nulla sul filesystem reale.
+      - /app/backend/.venv
+      - /app/backend/__pycache__
+      - /app/scraper/__pycache__
     depends_on:
       db:
         condition: service_healthy
@@ -102,9 +131,18 @@ services:
       # Stesso layout di lotto_stat_web (backend/ e scraper/ sibling
       # sotto /app): --reload di uvicorn osserva questi file montati e
       # riavvia da solo ad ogni modifica, senza rebuild dell'immagine.
-      - ./backend:/app/backend:Z
-      - ./scraper:/app/scraper:Z
-      - ./db/storici:/app/db/storici:Z
+      # :z minuscola (condivisa, non :Z privata): vedi nota identica nel
+      # servizio "web", stesso path host montato in entrambi i container.
+      - ./backend:/app/backend:z
+      - ./scraper:/app/scraper:z
+      - ./db/storici:/app/db/storici:z
+      # Maschera backend/.venv (venv locale host, irrilevante nel
+      # container e causa reale di un reload-storm di WatchFiles
+      # riscontrato in pratica: --reload cammina l'intero WORKDIR e si
+      # è messo a osservare decine di migliaia di file di quel venv).
+      - /app/backend/.venv
+      - /app/backend/__pycache__
+      - /app/scraper/__pycache__
     depends_on:
       db:
         condition: service_healthy

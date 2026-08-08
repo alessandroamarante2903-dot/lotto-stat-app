@@ -31,4 +31,14 @@ RUN pip install --no-cache-dir -r requirements.txt
 # sovrascritto dal bind mount ./backend:/app/backend.
 COPY . .
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+# --reload-exclude in difesa: il bind mount di ./backend porta dentro
+# anche backend/.venv (venv locale usata per lo sviluppo/test fuori dal
+# container, mai il vero .venv del container, che ha le sue dipendenze
+# già installate da pip sopra). Senza esclusione, WatchFiles cammina
+# ricorsivamente su migliaia di file di quel venv ad ogni avvio e va in
+# reload-storm (visto in pratica: un solo evento con ~15.000 path
+# elencati, seguito da un crash della fase di reload). L'esclusione qui
+# è difesa in profondità: la vera correzione è NON montare .venv dentro
+# il container (vedi l'anonymous volume che lo maschera in podman-compose.yml).
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", \
+     "--reload-exclude", ".venv/*", "--reload-exclude", "__pycache__/*"]

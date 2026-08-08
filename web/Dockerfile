@@ -18,4 +18,9 @@ EXPOSE 8501
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=5 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health').read()" || exit 1
 
-CMD ["streamlit", "run", "app.py", "--server.address=0.0.0.0", "--server.port=8501", "--server.headless=true", "--browser.gatherUsageStats=false"]
+# DIAGNOSTICA TEMPORANEA: il container si riavviava da solo, exit code 0,
+# nessun errore in log, nessun OOM/AVC/healthcheck a spiegarlo (vedi
+# indagine in CLAUDE.md). Il trap qui stampa il segnale ricevuto PRIMA di
+# terminare, per capire se è SIGTERM (qualcosa lo chiede "gentilmente",
+# intercettabile) o altro. Va rimosso una volta trovata la causa.
+CMD ["sh", "-c", "trap 'echo \"[DIAGNOSTICA] Ricevuto SIGTERM\" >&2' TERM; trap 'echo \"[DIAGNOSTICA] Ricevuto SIGINT\" >&2' INT; streamlit run app.py --server.address=0.0.0.0 --server.port=8501 --server.headless=true --browser.gatherUsageStats=false & pid=$!; wait $pid; echo \"[DIAGNOSTICA] streamlit uscito con codice $?\" >&2"]

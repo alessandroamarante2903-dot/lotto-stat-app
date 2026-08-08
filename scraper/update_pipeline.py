@@ -97,6 +97,8 @@ TABELLE_CACHE = (
     "cache_lotto_ambi",
     "cache_lotto_terzine",
     "cache_lotto_isocronismi",
+    "cache_lotto_ritardo",
+    "cache_lotto_frequenza",
     "cache_sen_ambi",
     "cache_sen_terni",
 )

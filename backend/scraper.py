@@ -127,6 +127,14 @@ DB_CONFIG = {
     "database": os.environ.get("DB_NAME", "lotto_statistics"),
     "user": os.environ.get("DB_USER", "statistics_user"),
     "password": os.environ.get("DB_PASSWORD", "CHANGE_ME_STRONG_PASSWORD"),
+    # use_pure=True: riscontrato in pratica che l'estensione C di
+    # mysql-connector-python (_mysql_connector, usata di default) può
+    # terminare il processo con SIGABRT (exit code 134, non un'eccezione
+    # Python) sotto pressione di memoria — vedi indagine in web/db.py e
+    # CLAUDE.md. Questo modulo viene eseguito sia dentro lotto_stat_web
+    # (subprocess del pannello di controllo) sia dentro lotto_stat_backend
+    # (in-process, thread di uvicorn): stessa superficie di rischio.
+    "use_pure": True,
 }
 
 # Cartella storici: di default si assume che 'backend/' e 'db/' siano

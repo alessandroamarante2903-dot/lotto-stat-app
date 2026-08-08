@@ -40,7 +40,28 @@ DEFAULT_TTL_SECONDI = 60
 
 @st.cache_resource(show_spinner=False)
 def _connessione() -> mysql.connector.MySQLConnection:
-    return mysql.connector.connect(**DB_CONFIG)
+    # autocommit=True è essenziale qui: questa connessione è un SINGOLETTO
+    # (st.cache_resource) riusato per l'intera vita del processo Streamlit,
+    # non una connessione-per-richiesta. mysql-connector-python ha
+    # autocommit=False di default: senza questo, ogni SELECT apre una
+    # transazione che resta agganciata alla connessione finché non arriva
+    # un commit esplicito, che qui non c'era mai per le sole letture.
+    # Bug reale riscontrato in pratica: dopo qualche minuto di navigazione
+    # nella dashboard, la transazione (mai committata) arrivava a tenere
+    # SHARED_READ lock su decine di viste/tabelle, bloccando indefinitamente
+    # qualunque "CREATE OR REPLACE VIEW"/DDL da un'altra sessione
+    # ("Waiting for table metadata lock") e allungando la history list di
+    # InnoDB (probabile concausa della lentezza generale osservata).
+    #
+    # use_pure=True: il container si riavviava da solo con exit code 134
+    # (SIGABRT, non un'eccezione Python, non un SIGTERM esterno — nessun
+    # traceback, nessun trap di segnale intercettato). Il sospetto è
+    # l'estensione C di mysql-connector-python (_mysql_connector, usata
+    # di default), nota per crash sotto pressione di memoria: l'host in
+    # quel momento aveva swap molto pieno (vedi CLAUDE.md). use_pure forza
+    # l'implementazione Python pura: più lenta, ma senza superficie C che
+    # possa fare abort() sul processo intero.
+    return mysql.connector.connect(autocommit=True, use_pure=True, **DB_CONFIG)
 
 
 def _connessione_viva() -> mysql.connector.MySQLConnection:

@@ -348,8 +348,124 @@ HAVING COUNT(*) > 1;
 
 
 -- =====================================================================
+-- SEZIONE 2quater — RITARDO STORICO MASSIMO E INDICE DI CONVENIENZA
+--
+-- v_lotto_ritardo_storico_max usa LAG() OVER su tutta
+-- v_lotto_estratti_flat_seq (383k+ righe unpivotate, cresce con lo
+-- storico) e v_lotto_indice_convenienza la combina con
+-- v_lotto_ritardo_attuale_ruota: nessuna delle due è mai materializzata,
+-- quindi OGNI lettura (anche filtrata su una sola ruota con LIMIT 10)
+-- ricalcola tutto lo storico da capo — il filtro non si spinge dentro
+-- il window function attraverso i livelli di vista annidati.
+--
+-- Misurato in pratica su storico reale (Lotto dal 1939): "SELECT * FROM
+-- v_lotto_indice_convenienza WHERE ruota=... ORDER BY ritardo_attuale
+-- DESC LIMIT 10" impiegava ~8,9 secondi — è la PRIMA query eseguita
+-- dalla dashboard all'apertura (sezione "Ritardatari", tab di default).
+-- EXPLAIN mostra una stima di 34+ milioni di righe intermedie.
+--
+-- Stesso pattern già usato per gli Ambi: cache materializzata (990
+-- righe, 11 ruote x 90 numeri — piccola, quindi refresh economico) con
+-- procedura di aggiornamento esplicito dopo ogni import di nuove
+-- estrazioni, invece di ricalcolare ad ogni lettura.
+-- =====================================================================
+
+CREATE TABLE IF NOT EXISTS cache_lotto_ritardo (
+    ruota                VARCHAR(20)      NOT NULL,
+    numero               TINYINT UNSIGNED NOT NULL,
+    ritardo_attuale      INT UNSIGNED     NOT NULL DEFAULT 0,
+    ritardo_storico_max  INT UNSIGNED     NOT NULL DEFAULT 0,
+    indice_convenienza   DECIMAL(10,4)    NULL,
+    aggiornato_il        TIMESTAMP        DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (ruota, numero),
+    KEY idx_lotto_ritardo_attuale (ruota, ritardo_attuale DESC),
+    KEY idx_lotto_ritardo_indice (ruota, indice_convenienza DESC)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+DROP PROCEDURE IF EXISTS sp_refresh_lotto_ritardo;
+
+DELIMITER $$
+
+CREATE PROCEDURE sp_refresh_lotto_ritardo()
+BEGIN
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        ROLLBACK;
+        RESIGNAL;
+    END;
+
+    START TRANSACTION;
+    DELETE FROM cache_lotto_ritardo;
+
+    INSERT INTO cache_lotto_ritardo (ruota, numero, ritardo_attuale, ritardo_storico_max, indice_convenienza)
+    SELECT ruota, numero, ritardo_attuale, ritardo_storico_max, indice_convenienza
+    FROM v_lotto_indice_convenienza;
+
+    COMMIT;
+END$$
+
+DELIMITER ;
+
+-- Uso: CALL sp_refresh_lotto_ritardo();
+-- Da rilanciare dopo ogni import di nuove estrazioni (già incluso in
+-- sp_refresh_tutte_le_cache_lotto() sotto).
+
+
+-- =====================================================================
+-- SEZIONE 2quinquies — FREQUENZA PER RUOTA
+--
+-- v_lotto_frequenza_ruota non usa window function (solo CROSS JOIN +
+-- aggregazione con LEFT JOIN), quindi è molto più leggera delle viste
+-- di ritardo, ma resta comunque una vista live: misurata ~0,7s per
+-- lettura filtrata su una ruota — non nella stessa classe di gravità
+-- del ritardo (~8,9s), ma è la seconda query più lenta fra quelle usate
+-- dalla dashboard/API dopo il fix di cache_lotto_ritardo, quindi vale
+-- lo stesso trattamento per coerenza.
+-- =====================================================================
+
+CREATE TABLE IF NOT EXISTS cache_lotto_frequenza (
+    ruota                VARCHAR(20)      NOT NULL,
+    numero               TINYINT UNSIGNED NOT NULL,
+    frequenza            INT UNSIGNED     NOT NULL DEFAULT 0,
+    totale_estrazioni    INT UNSIGNED     NOT NULL DEFAULT 0,
+    frequenza_relativa   DECIMAL(10,6)    NULL,
+    aggiornato_il        TIMESTAMP        DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (ruota, numero),
+    KEY idx_lotto_frequenza (ruota, frequenza DESC)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+DROP PROCEDURE IF EXISTS sp_refresh_lotto_frequenza;
+
+DELIMITER $$
+
+CREATE PROCEDURE sp_refresh_lotto_frequenza()
+BEGIN
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        ROLLBACK;
+        RESIGNAL;
+    END;
+
+    START TRANSACTION;
+    DELETE FROM cache_lotto_frequenza;
+
+    INSERT INTO cache_lotto_frequenza (ruota, numero, frequenza, totale_estrazioni, frequenza_relativa)
+    SELECT ruota, numero, frequenza, totale_estrazioni, frequenza_relativa
+    FROM v_lotto_frequenza_ruota;
+
+    COMMIT;
+END$$
+
+DELIMITER ;
+
+-- Uso: CALL sp_refresh_lotto_frequenza();
+
+
+-- =====================================================================
 -- SEZIONE 3 — PROCEDURA UNICA PER IL LOTTO
 -- =====================================================================
+DROP PROCEDURE IF EXISTS sp_refresh_tutte_le_cache_lotto;
+
 DELIMITER $$
 
 CREATE PROCEDURE sp_refresh_tutte_le_cache_lotto()
@@ -357,6 +473,8 @@ BEGIN
     CALL sp_refresh_lotto_ambi();
     CALL sp_refresh_lotto_terzine();
     CALL sp_refresh_lotto_isocronismi();
+    CALL sp_refresh_lotto_ritardo();
+    CALL sp_refresh_lotto_frequenza();
 END$$
 
 DELIMITER ;

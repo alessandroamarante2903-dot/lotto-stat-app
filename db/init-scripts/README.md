@@ -10,7 +10,7 @@ mantenendo netta separazione fra i due giochi in ogni oggetto.
 |---|---|
 | `01_dimensioni_helper.sql` | `dim_ruote`, `dim_numeri` (1-90), famiglie classiche Lotto (`v_lotto_numero_famiglie`), `v_ambi_possibili` |
 | `02_viste_lotto.sql` | Viste Lotto: basi, frequenze, RA/RS/IC, cadenze/decine/figure/gemelli/vertibili, posizionali |
-| `03_procedure_cache_lotto.sql` | Cache + procedure Lotto: Ambi, Terzine, Isocronismi, Sincronismi, Cinquine ripetute |
+| `03_procedure_cache_lotto.sql` | Cache + procedure Lotto: Ambi, Terzine, Isocronismi, Ritardo/Indice di Convenienza, Frequenza per ruota, Sincronismi, Cinquine ripetute |
 | `04_viste_superenalotto.sql` | Viste SuperEnalotto: basi, frequenze per era, ritardi (2 versioni), Jolly/SuperStar, pari/dispari, decine, somma, consecutività |
 | `05_procedure_cache_superenalotto.sql` | Cache + procedure SuperEnalotto: Ambi, Terni (segmentati per `tipo_regolamento`) |
 | `06_master_refresh_e_grant.sql` | `sp_refresh_tutte_le_cache()` + GRANT minimi per `statistics_user` |
@@ -64,6 +64,21 @@ grazie al `SELECT` che `statistics_user` ha già a livello di schema.
 
 ## Changelog
 
+- **Performance**: aggiunta `cache_lotto_ritardo` + `sp_refresh_lotto_ritardo()`
+  (sezione 2quater di `03_procedure_cache_lotto.sql`) per materializzare
+  `v_lotto_indice_convenienza`, misurata a ~8,9s per lettura filtrata (era
+  la prima query eseguita dalla dashboard). Da cache: ~0,07s. Vedi "Nota
+  sulle performance" più sotto per i dettagli della misura.
+- **Performance**: aggiunta `cache_lotto_frequenza` + `sp_refresh_lotto_frequenza()`
+  (sezione 2quinquies) per materializzare `v_lotto_frequenza_ruota`
+  (~0,7s per lettura filtrata, la vista più lenta rimasta dopo il fix
+  precedente). Da cache: ~0,08s.
+- **Fix**: `v_sen_somma_distribuzione` falliva con errore 1055
+  (`sql_mode=only_full_group_by`, default MySQL 8): il `GROUP BY`
+  raggruppava su `FLOOR(somma / 20)` ma il `SELECT` esponeva
+  `FLOOR(somma/20)*20` — MySQL verifica l'identità sintattica delle
+  espressioni, non la dipendenza funzionale. Corretto ripetendo le stesse
+  espressioni nel `GROUP BY`.
 - **Fix**: `v_sen_superstar_frequenza`/`v_sen_superstar_ritardo` filtravano
   solo `superstar IS NOT NULL`, senza incrociare `tipo_regolamento`. Il
   SuperStar è stato introdotto il 7 maggio 2009, **prima** del cambio
@@ -132,6 +147,8 @@ oppure singolarmente:
 CALL sp_refresh_lotto_ambi();
 CALL sp_refresh_lotto_terzine();
 CALL sp_refresh_lotto_isocronismi();
+CALL sp_refresh_lotto_ritardo();
+CALL sp_refresh_lotto_frequenza();
 CALL sp_refresh_sen_ambi();
 CALL sp_refresh_sen_terni();
 ```
@@ -202,8 +219,20 @@ LIMIT 10;
 
 Le viste `v_lotto_ritardo_storico_max`, `v_lotto_estratti_famiglie` e affini
 usano funzioni finestra su tutta la vista "flat" (unpivot dello storico
-completo). Su uno storico Lotto dal 1939 (~700-800k righe dopo l'unpivot)
-restano interrogabili in tempi ragionevoli per un uso da dashboard, ma se in
-futuro noti latenza, il pattern da seguire è lo stesso già usato per gli
-Ambi: materializzale in una tabella cache con una stored procedure di
+completo, ~380k righe per il solo Lotto dal 1939, prima ancora di contare
+il SuperEnalotto). **Misurato in produzione**: `v_lotto_indice_convenienza`
+(che combina `v_lotto_ritardo_storico_max` con `v_lotto_ritardo_attuale_ruota`)
+impiegava **~8,9 secondi** anche filtrata su una sola ruota con `LIMIT 10`
+— `EXPLAIN` mostra una stima di 34+ milioni di righe intermedie, perché il
+filtro non si spinge dentro il window function attraverso i livelli di
+vista annidati. Era la prima query eseguita dalla dashboard all'apertura.
+
+**Risolto**: `cache_lotto_ritardo` (`03_procedure_cache_lotto.sql`, sezione
+2quater) materializza `v_lotto_indice_convenienza` (990 righe: 11 ruote x
+90 numeri) con `sp_refresh_lotto_ritardo()`, stesso pattern già usato per
+gli Ambi — richiamata da `sp_refresh_tutte_le_cache_lotto()`. Tempo di
+lettura dalla cache: ~0,07s (era ~8,9s dalla vista live, ~120x più veloce).
+Se in futuro noti la stessa latenza su altre viste con window function non
+ancora cachate (es. `v_lotto_estratti_famiglie`), il pattern da seguire è
+identico: materializzale in una tabella cache con una stored procedure di
 refresh, riusando l'SQL della vista as-is nel corpo della `INSERT`.

@@ -879,8 +879,99 @@ HAVING COUNT(*) > 1;
 
 
 -- =====================================================================
+-- SEZIONE 2quater — RITARDO STORICO MASSIMO E INDICE DI CONVENIENZA
+-- Cache dei risultati (window function pesante mai materializzata,
+-- misurata ~8,9s in produzione): vedi commento completo in
+-- 03_procedure_cache_lotto.sql.
+-- =====================================================================
+
+CREATE TABLE IF NOT EXISTS cache_lotto_ritardo (
+    ruota                VARCHAR(20)      NOT NULL,
+    numero               TINYINT UNSIGNED NOT NULL,
+    ritardo_attuale      INT UNSIGNED     NOT NULL DEFAULT 0,
+    ritardo_storico_max  INT UNSIGNED     NOT NULL DEFAULT 0,
+    indice_convenienza   DECIMAL(10,4)    NULL,
+    aggiornato_il        TIMESTAMP        DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (ruota, numero),
+    KEY idx_lotto_ritardo_attuale (ruota, ritardo_attuale DESC),
+    KEY idx_lotto_ritardo_indice (ruota, indice_convenienza DESC)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+DROP PROCEDURE IF EXISTS sp_refresh_lotto_ritardo;
+
+DELIMITER $$
+
+CREATE PROCEDURE sp_refresh_lotto_ritardo()
+BEGIN
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        ROLLBACK;
+        RESIGNAL;
+    END;
+
+    START TRANSACTION;
+    DELETE FROM cache_lotto_ritardo;
+
+    INSERT INTO cache_lotto_ritardo (ruota, numero, ritardo_attuale, ritardo_storico_max, indice_convenienza)
+    SELECT ruota, numero, ritardo_attuale, ritardo_storico_max, indice_convenienza
+    FROM v_lotto_indice_convenienza;
+
+    COMMIT;
+END$$
+
+DELIMITER ;
+
+-- Uso: CALL sp_refresh_lotto_ritardo();
+
+
+-- =====================================================================
+-- SEZIONE 2quinquies — FREQUENZA PER RUOTA
+-- Vedi commento completo in 03_procedure_cache_lotto.sql.
+-- =====================================================================
+
+CREATE TABLE IF NOT EXISTS cache_lotto_frequenza (
+    ruota                VARCHAR(20)      NOT NULL,
+    numero               TINYINT UNSIGNED NOT NULL,
+    frequenza            INT UNSIGNED     NOT NULL DEFAULT 0,
+    totale_estrazioni    INT UNSIGNED     NOT NULL DEFAULT 0,
+    frequenza_relativa   DECIMAL(10,6)    NULL,
+    aggiornato_il        TIMESTAMP        DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (ruota, numero),
+    KEY idx_lotto_frequenza (ruota, frequenza DESC)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+DROP PROCEDURE IF EXISTS sp_refresh_lotto_frequenza;
+
+DELIMITER $$
+
+CREATE PROCEDURE sp_refresh_lotto_frequenza()
+BEGIN
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        ROLLBACK;
+        RESIGNAL;
+    END;
+
+    START TRANSACTION;
+    DELETE FROM cache_lotto_frequenza;
+
+    INSERT INTO cache_lotto_frequenza (ruota, numero, frequenza, totale_estrazioni, frequenza_relativa)
+    SELECT ruota, numero, frequenza, totale_estrazioni, frequenza_relativa
+    FROM v_lotto_frequenza_ruota;
+
+    COMMIT;
+END$$
+
+DELIMITER ;
+
+-- Uso: CALL sp_refresh_lotto_frequenza();
+
+
+-- =====================================================================
 -- SEZIONE 3 — PROCEDURA UNICA PER IL LOTTO
 -- =====================================================================
+DROP PROCEDURE IF EXISTS sp_refresh_tutte_le_cache_lotto;
+
 DELIMITER $$
 
 CREATE PROCEDURE sp_refresh_tutte_le_cache_lotto()
@@ -888,6 +979,8 @@ BEGIN
     CALL sp_refresh_lotto_ambi();
     CALL sp_refresh_lotto_terzine();
     CALL sp_refresh_lotto_isocronismi();
+    CALL sp_refresh_lotto_ritardo();
+    CALL sp_refresh_lotto_frequenza();
 END$$
 
 DELIMITER ;
@@ -1240,7 +1333,9 @@ SELECT
     FLOOR(somma / 20) * 20 + 19 AS fascia_somma_a,
     COUNT(*) AS frequenza
 FROM v_sen_somma_sestina
-GROUP BY tipo_regolamento, FLOOR(somma / 20);
+-- vedi 04_viste_superenalotto.sql: GROUP BY deve ripetere le espressioni
+-- SELECT parola per parola sotto sql_mode=only_full_group_by (MySQL 8).
+GROUP BY tipo_regolamento, FLOOR(somma / 20) * 20, FLOOR(somma / 20) * 20 + 19;
 
 CREATE OR REPLACE VIEW v_sen_somma_statistiche AS
 SELECT
