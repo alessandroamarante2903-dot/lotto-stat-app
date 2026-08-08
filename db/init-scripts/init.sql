@@ -89,21 +89,13 @@ CREATE USER IF NOT EXISTS 'statistics_user'@'%' IDENTIFIED BY 'CHANGE_ME_STRONG_
 CREATE USER IF NOT EXISTS 'statistics_user'@'localhost' IDENTIFIED BY 'CHANGE_ME_STRONG_PASSWORD';
 
 -- 2. ASSEGNAZIONE PRIVILEGI PER L'ACCESSO ESTERNO (Script Python nel container backend)
-GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, SHOW VIEW, ALTER
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, SHOW VIEW, ALTER, EXECUTE
     ON lotto_statistics.*
     TO 'statistics_user'@'%';
 
-GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, SHOW VIEW, ALTER
-    ON estrazioni_superenalotto.*
-    TO 'statistics_user'@'%';
-
 -- 3. ASSEGNAZIONE PRIVILEGI PER L'ACCESSO LOCALE (I tuoi test con podman-compose exec)
-GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, SHOW VIEW, ALTER
-    ON lotto_statistics.* 
-    TO 'statistics_user'@'localhost';
-
-GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, SHOW VIEW, ALTER
-    ON estrazioni_superenalotto.*
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, SHOW VIEW, ALTER, EXECUTE
+    ON lotto_statistics.*
     TO 'statistics_user'@'localhost';
 
 -- 4. APPLICAZIONE DEI PRIVILEGI
