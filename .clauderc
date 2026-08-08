@@ -1,0 +1,14 @@
+- sto sviluppando uno script Python (scraper.py) con un database MySQL (in ambiente Podman rootless su Fedora) per raccogliere ed elaborare le statistiche di Lotto e SuperEnalotto. 
+- Il database è già popolato con lo storico completo.
+- è stato messo appunto un script python che esegue il download delle estrazioni per supenalotto, per il lotto viene letto un file di testo con lo storico
+### REQUISITI DI CODICE:
+	- Il codice deve essere integrato in un unico file `scraper.py` pulito, strutturato a funzioni o classi, con una gestione robusta delle eccezioni (`MySQLError`, `RequestException`) 
+e timeout espliciti su ogni chiamata.
+- Nel Lotto la variabile chiave è la Ruota. Un numero estratto a Bari ha una sua storia indipendente rispetto a quando viene estratto a Milano o sulla Nazionale.
+- RIFLESSIONE STATISTICA SULLE "ERE" DEL SUPERENALOTTO
+Il gioco del SuperEnalotto ha tre macro-periodi storici che influenzano pesantemente i calcoli statistici (frequenze, ritardi, ecc.):
+	- Dal 1871 al 2 Dicembre 1997: Estrazioni "Simulate/Retroattive". I siti storici applicano le regole del SuperEnalotto ai vecchi dati del Lotto per estendere l'archivio.
+	- Dal 3 Dicembre 1997 al 30 Giugno 2009: Gioco reale, ma la combinazione dipendeva dai primi estratti delle ruote del Lotto (Bari, Firenze, Milano, Napoli, Palermo, Roma). Il Jolly era il 2° di Bari. 
+Il Superstar (dal 2006) dipendeva dalla ruota Nazionale.
+	- Dal 1º Luglio 2009 a Oggi: Gioco reale e totalmente indipendente (urne dedicate, algoritmi moderni, estrazione separata per la sestina+Jolly e per il Superstar).
+- 

@@ -1,0 +1,15 @@
+# Ignora file di ambiente, log e database
+*.log
+*.sqlite
+*.sql
+*.bin
+db_data/
+.venv/
+venv/
+node_modules/
+
+# Ignora cache e build
+__pycache__/
+.pytest_cache/
+.git/
+.podman/
