@@ -1,0 +1,32 @@
+# =====================================================================
+# grafana/provisioning/datasources/datasource.yml
+# Provisioning automatico del datasource MySQL al primo avvio del
+# container lotto_stat_grafana (montato su
+# /etc/grafana/provisioning/datasources/, path standard letto da Grafana
+# all'avvio). Le credenziali sono lette dalle variabili d'ambiente del
+# container grafana (DB_HOST/DB_NAME/DB_USER/DB_PASSWORD, impostate in
+# podman-compose.yml a partire da .env) tramite la sintassi $VARIABILE
+# supportata nativamente da Grafana nei file di provisioning dalla v8+.
+# MySQL è un datasource "core" di Grafana: non serve installare plugin.
+# =====================================================================
+
+apiVersion: 1
+
+datasources:
+  - name: MySQL - lotto_statistics
+    uid: lotto_statistics_mysql
+    type: mysql
+    access: proxy
+    url: $DB_HOST:$DB_PORT
+    database: $DB_NAME
+    user: $DB_USER
+    secureJsonData:
+      password: $DB_PASSWORD
+    jsonData:
+      maxOpenConns: 10
+      maxIdleConns: 2
+      connMaxLifetime: 14400
+      timezone: "Europe/Rome"
+    isDefault: true
+    editable: true
+    version: 1
