@@ -1,3 +1,4 @@
+tutte le chat saranno in italiano
 - sto sviluppando uno script Python (scraper.py) con un database MySQL (in ambiente Podman rootless su Fedora) per raccogliere ed elaborare le statistiche di Lotto e SuperEnalotto. 
 - Il database è già popolato con lo storico completo.
 - è stato messo appunto un script python che esegue il download delle estrazioni per supenalotto, per il lotto viene letto un file di testo con lo storico
