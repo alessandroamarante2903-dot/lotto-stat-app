@@ -14,13 +14,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     chromium-driver \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /app
+# WORKDIR annidato (non /app) apposta: a runtime podman-compose.yml
+# monta ./backend su /app/backend e ./scraper su /app/scraper, sibling
+# fra loro sotto /app — stesso layout del container lotto_stat_web.
+# scraper/update_pipeline.py risolve backend/scraper.py con un percorso
+# relativo ("../backend/scraper.py" rispetto a sé stesso): deve trovare
+# davvero un /app/backend accanto a /app/scraper, non un /app piatto.
+WORKDIR /app/backend
 
 # Copia e installa le dipendenze Python (incluso selenium e bs4)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copia il codice (compreso il nuovo scraper modificato da Claude)
+# Copia il codice: utile per un "podman build"/"podman run" a sé
+# stante, senza volumi; a runtime con podman-compose viene comunque
+# sovrascritto dal bind mount ./backend:/app/backend.
 COPY . .
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
