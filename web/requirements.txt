@@ -1,0 +1,12 @@
+# --- UI ---
+streamlit==1.38.0
+pandas==2.2.2
+plotly==5.24.1
+watchdog==4.0.2   # file watcher nativo per .streamlit/config.toml (runOnSave), niente polling lento
+
+# --- Database (condivisa con backend/scraper.py, riusato da scraper/update_pipeline.py) ---
+mysql-connector-python==8.0.33
+
+# --- Scraper (dipendenze di backend/scraper.py, caricato da scraper/update_pipeline.py) ---
+requests==2.32.3
+beautifulsoup4==4.12.3
