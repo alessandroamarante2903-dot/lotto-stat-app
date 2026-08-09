@@ -17,9 +17,11 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
+from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, HTTPException, Query
 
+import analytics
 import db
 
 app = FastAPI(title="lotto-stat-app API", version="1.0.0")
@@ -147,6 +149,56 @@ def sen_ritardi(limite: int = Query(10, ge=1, le=90)) -> list[dict]:
         "SELECT numero, ritardo_attuale FROM v_sen_ritardo_azzerato_2009 ORDER BY ritardo_attuale DESC LIMIT %s",
         (limite,),
     )
+
+
+@app.get("/meta/finestra")
+def meta_finestra(gioco: str = Query(..., pattern="^(lotto|superenalotto)$")) -> dict:
+    """Min/max data disponibile e conteggio righe: usato dalla WebUI per
+    impostare i limiti reali del date-picker/slider dei filtri globali."""
+    tabella = "estrazioni_lotto" if gioco == "lotto" else "estrazioni_superenalotto"
+    righe = db.query(f"SELECT MIN(data_estrazione) AS data_min, MAX(data_estrazione) AS data_max, COUNT(*) AS totale FROM {tabella}")
+    return righe[0] if righe else {}
+
+
+@app.get("/analisi/somme")
+def analisi_somme(
+    gioco: str = Query(..., pattern="^(lotto|superenalotto)$"),
+    ruota: str = Query("Tutte", description="Nome ruota o 'Tutte' (solo Lotto; ignorato per SuperEnalotto)"),
+    data_da: Optional[str] = Query(None, description="YYYY-MM-DD"),
+    data_a: Optional[str] = Query(None, description="YYYY-MM-DD"),
+    n_estrazioni: Optional[int] = Query(None, ge=1, description="Ultime N estrazioni; sovrascrive data_da/data_a se presente insieme al conteggio"),
+    ampiezza_bin: int = Query(20, ge=1, le=100),
+) -> dict:
+    if gioco == "lotto" and ruota != "Tutte":
+        _valida_ruota(ruota)
+    return analytics.istogramma_somme(gioco, ruota, data_da, data_a, n_estrazioni, ampiezza_bin)
+
+
+@app.get("/analisi/tabellone")
+def analisi_tabellone(
+    ruota: str = Query("Tutte", description="Nome ruota o 'Tutte'"),
+    data_da: Optional[str] = Query(None),
+    data_a: Optional[str] = Query(None),
+    n_estrazioni: Optional[int] = Query(None, ge=1),
+    ritardo_min: Optional[int] = Query(None, ge=0),
+    ritardo_max: Optional[int] = Query(None, ge=0),
+) -> list[dict]:
+    if ruota != "Tutte":
+        _valida_ruota(ruota)
+    return analytics.tabellone_lotto(ruota, data_da, data_a, n_estrazioni, ritardo_min, ritardo_max)
+
+
+@app.post("/analisi/backtest")
+def analisi_backtest(
+    numeri: list[int] = Body(..., embed=True),
+    ruota: str = Body(..., embed=True),
+    data_da: Optional[str] = Body(None, embed=True),
+) -> dict:
+    _valida_ruota(ruota)
+    try:
+        return analytics.backtest_combinazione_lotto(numeri, ruota, data_da)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/scraper/nuove")
