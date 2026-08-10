@@ -84,8 +84,9 @@ services:
       # I moduli parametrici (web/pages/*.py, vedi web/api_client.py)
       # chiamano lotto_stat_backend via rete Podman interna, non tramite
       # nginx: 'backend' è il nome del servizio/container, risolto da
-      # aardvark-dns su lotto_stat_net.
-      BACKEND_API_URL: http://backend:8000
+      # aardvark-dns su lotto_stat_net. Override raro (es. backend fuori
+      # da questo podman-compose durante debug locale).
+      BACKEND_API_URL: ${BACKEND_API_URL:-http://backend:8000}
     volumes:
       - ./web:/app:Z
       # :z minuscola (non :Z) perché ./scraper, ./backend e ./db/storici
