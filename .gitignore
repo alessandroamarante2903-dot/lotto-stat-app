@@ -9,3 +9,4 @@ __pycache__/
 # Escludi eventuali file di dati locali o temporanei
 db/storici/*.csv 
 db/storici/*.txt
+.claude.json
