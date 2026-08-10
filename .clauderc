@@ -1,15 +1,36 @@
-tutte le chat saranno in italiano
-- sto sviluppando uno script Python (scraper.py) con un database MySQL (in ambiente Podman rootless su Fedora) per raccogliere ed elaborare le statistiche di Lotto e SuperEnalotto. 
-- Il database è già popolato con lo storico completo.
-- è stato messo appunto un script python che esegue il download delle estrazioni per supenalotto, per il lotto viene letto un file di testo con lo storico
-### REQUISITI DI CODICE:
-	- Il codice deve essere integrato in un unico file `scraper.py` pulito, strutturato a funzioni o classi, con una gestione robusta delle eccezioni (`MySQLError`, `RequestException`) 
-e timeout espliciti su ogni chiamata.
-- Nel Lotto la variabile chiave è la Ruota. Un numero estratto a Bari ha una sua storia indipendente rispetto a quando viene estratto a Milano o sulla Nazionale.
-- RIFLESSIONE STATISTICA SULLE "ERE" DEL SUPERENALOTTO
-Il gioco del SuperEnalotto ha tre macro-periodi storici che influenzano pesantemente i calcoli statistici (frequenze, ritardi, ecc.):
-	- Dal 1871 al 2 Dicembre 1997: Estrazioni "Simulate/Retroattive". I siti storici applicano le regole del SuperEnalotto ai vecchi dati del Lotto per estendere l'archivio.
-	- Dal 3 Dicembre 1997 al 30 Giugno 2009: Gioco reale, ma la combinazione dipendeva dai primi estratti delle ruote del Lotto (Bari, Firenze, Milano, Napoli, Palermo, Roma). Il Jolly era il 2° di Bari. 
-Il Superstar (dal 2006) dipendeva dalla ruota Nazionale.
-	- Dal 1º Luglio 2009 a Oggi: Gioco reale e totalmente indipendente (urne dedicate, algoritmi moderni, estrazione separata per la sestina+Jolly e per il Superstar).
-- 
+t# REGOLAMENTO E CONTESTO DI PROGETTO (.clauderc / CLAUDE.md)
+
+## Lingua
+- Tutte le interazioni, spiegazioni, commenti nel codice e documentazione avvengono esclusivamente in lingua ITALIANA.
+
+## Panoramica dell'Ambiente e Architettura
+- **Ambiente Host:** Fedora Workstation con Podman rootless (orchestrazione a 5 container via `podman-compose.yml`: `lotto_stat_db`, `lotto_stat_web`, `lotto_stat_backend`, `lotto_stat_grafana`, `lotto_stat_proxy`).
+- **Database:** MySQL 8 (`lotto_statistics`), già ampiamente popolato con lo storico completo (Lotto dal 1939 e SuperEnalotto dal 1997/2009).
+- **Core Pipeline:** Integrazione in Python (`backend/scraper.py` e `scraper/update_pipeline.py`).
+  - **Lotto:** Storico caricato tramite parsing da file di testo locale (`db/storici/storico.txt`).
+  - **SuperEnalotto:** Ingestion e backfill delle nuove estrazioni tramite provider/scraping con fallback.
+
+## Requisiti di Codice e Sviluppo
+- **Monolite Logico `scraper.py`:** Il codice core deve risiedere o integrarsi in modo pulito dentro `backend/scraper.py`, ben strutturato a funzioni o classi chiare e modulari.
+- **Gestione Errori e Network Robustezza:**
+  - Gestione esplicita e rigorosa delle eccezioni di database (`mysql.connector.Error` / `MySQLError`) e di rete (`requests.RequestException` o sottoclassi `ScraperNetworkError`, `ScraperParsingError`).
+  - **Timeout obbligatori ed espliciti** su ogni chiamata di rete HTTP/API.
+  - Chiusura corretta delle connessioni/cursori ed evita transazioni pendenti (modalità `autocommit=True` o gestione esplicita dove richiesto).
+
+## Logica Dominio e Vincoli Statistici
+
+### 1. Lotto (La Ruota come Variabile Chiave)
+- La **ruota è la variabile di partizionamento fondamentale**. 
+- Un numero estratto a Bari ha una storia statistica e un ciclo di ritardo/frequenza del tutto **indipendente** rispetto allo stesso numero estratto a Milano, Roma o sulla Nazionale.
+
+### 2. SuperEnalotto (Le Tre Ere Regolamentari)
+I calcoli statistici (frequenze, ritardi, ambi/terzine) devono tenere conto delle 3 macro-ere del SuperEnalotto, gestite dalla colonna/logica `tipo_regolamento`:
+1. **`SIMULATO` (< 3 Dicembre 1997):** Estrazioni retroattive (regole SuperEnalotto applicate ai vecchi estratti del Lotto).
+2. **`LOTTO` (3 Dicembre 1997 – 30 Giugno 2009):** Gioco reale ma derivato dalle prime estrazioni di 6 ruote del Lotto (Bari, Firenze, Milano, Napoli, Palermo, Roma). Jolly = 2° di Bari; SuperStar (dal 2006) = ruota Nazionale.
+3. **`INDIPENDENTE` (Dal 1° Luglio 2009 ad Oggi):** Gioco reale con urne dedicate e totalmente separate sia per la sestina+Jolly che per il SuperStar.
+
+> **Regola Operativa:** Le viste e i calcoli statistici non devono mai mescolare indiscriminatamente le tre ere senza un filtro esplicito (di default le analisi principali filtrano su era `INDIPENDENTE` o separano nettamente l'archivio).
+
+## Regole di Sicurezza ed Esecuzione
+- Non eseguire mai comandi DDL distruttivi (`DROP DATABASE`, `TRUNCATE TABLE`, `DROP TABLE`) o script di piallatura dei volumi senza preventiva richiesta e conferma esplicita.
+- Considerare sempre i percorsi montati con l'opzione `:z` in Podman per evitare conflitti di permessi SELinux tra i container `web` e `backend`.

@@ -6,6 +6,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Tutte le conversazioni in questo repository avvengono in italiano (vedi `.clauderc`).
 
+# Specialized Environment: Web, DB & Statistical Computing
+
+## Tech Stack & Preferences
+- **Web**: Python (FastAPI / Streamlit) o Node.js. Prediligi codice asincrono, tipizzato ed efficiente.
+- **Database**: PostgreSQL / MySQL. Scrivi query SQL ottimizzate, gestisci correttamente indici e transazioni.
+- **Calcolo Statistico**: Python (Pandas, NumPy, SciPy, Statsmodels) o R. 
+  - Rispetta la pulizia dei dati (data cleaning) prima delle analisi.
+  - Genera codice riproducibile e commentato con spiegazioni matematiche/statistiche dove necessario.
+
+## Workflow Rules
+- **DB Safety**: Non eseguire mai query `DROP`, `DELETE` o `TRUNCATE` distruttive in automatico senza previa conferma esplicita.
+- **Performance**: Nello sviluppo web, poni sempre attenzione all'efficienza e al tempo di risposta delle API.
+- **Data Analysis**: Quando fai analisi statistiche, mostra sempre un riepilogo sintetico dei dati (mean, median, std dev, missing values) prima di trarre conclusioni.
+
 ## Panoramica del progetto
 
 App di statistiche per Lotto e SuperEnalotto italiani. Uno scraper Python popola un database MySQL con lo storico e le nuove estrazioni; un motore SQL di viste e stored procedure calcola frequenze, ritardi, ambi/terzine e altre statistiche derivate; un frontend Streamlit espone dashboard, calcolatore schedine/sistemi e pannello di controllo per lo scraping; un'API FastAPI espone le stesse statistiche in HTTP per consumer esterni; Grafana offre analytics avanzate sulle stesse viste MySQL; Nginx fa da reverse proxy unico. Ambiente containerizzato con Podman rootless su Fedora.
