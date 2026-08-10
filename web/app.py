@@ -20,6 +20,7 @@ from pathlib import Path
 import plotly.express as px
 import streamlit as st
 
+import api_client
 import calcolo_costi as costi
 import db
 
@@ -306,6 +307,13 @@ with tab_scraper:
                 except subprocess.TimeoutExpired:
                     codice, output = 1, f"Timeout: superati {TIMEOUT_PIPELINE_SECONDI}s."
             db.svuota_cache_query()
+            if codice == 0 and not api_client.invalidare_cache_backend():
+                st.warning(
+                    "Dati aggiornati, ma non sono riuscito ad avvisare il backend "
+                    "(lotto_stat_backend non raggiungibile): la Piattaforma di Controllo "
+                    "parametrica potrebbe mostrare dati non aggiornati fino al prossimo "
+                    "refresh via API o riavvio del backend."
+                )
             (st.success if codice == 0 else st.error)(f"Terminato con codice {codice}.")
             st.code(output or "(nessun output)")
 
@@ -317,5 +325,12 @@ with tab_scraper:
                 except subprocess.TimeoutExpired:
                     codice, output = 1, f"Timeout: superati {TIMEOUT_PIPELINE_SECONDI}s."
             db.svuota_cache_query()
+            if codice == 0 and not api_client.invalidare_cache_backend():
+                st.warning(
+                    "Dati aggiornati, ma non sono riuscito ad avvisare il backend "
+                    "(lotto_stat_backend non raggiungibile): la Piattaforma di Controllo "
+                    "parametrica potrebbe mostrare dati non aggiornati fino al prossimo "
+                    "refresh via API o riavvio del backend."
+                )
             (st.success if codice == 0 else st.error)(f"Terminato con codice {codice}.")
             st.code(output or "(nessun output)")

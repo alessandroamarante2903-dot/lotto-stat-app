@@ -168,10 +168,14 @@ def analisi_somme(
     data_a: Optional[str] = Query(None, description="YYYY-MM-DD"),
     n_estrazioni: Optional[int] = Query(None, ge=1, description="Ultime N estrazioni; sovrascrive data_da/data_a se presente insieme al conteggio"),
     ampiezza_bin: int = Query(20, ge=1, le=100),
+    posizioni: Optional[list[str]] = Query(None, description="Sottoinsieme di posizioni (es. Primo,Terzo per Lotto; n1,n2 per SuperEnalotto). Assente = tutte."),
 ) -> dict:
     if gioco == "lotto" and ruota != "Tutte":
         _valida_ruota(ruota)
-    return analytics.istogramma_somme(gioco, ruota, data_da, data_a, n_estrazioni, ampiezza_bin)
+    try:
+        return analytics.istogramma_somme(gioco, ruota, data_da, data_a, n_estrazioni, ampiezza_bin, posizioni)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/analisi/tabellone")
@@ -182,21 +186,58 @@ def analisi_tabellone(
     n_estrazioni: Optional[int] = Query(None, ge=1),
     ritardo_min: Optional[int] = Query(None, ge=0),
     ritardo_max: Optional[int] = Query(None, ge=0),
+    stato: str = Query("Tutti", pattern="^(Tutti|Vergine|Frequente|Iper-ritardatario)$"),
+    passo_k: int = Query(5, ge=2, le=20),
 ) -> list[dict]:
     if ruota != "Tutte":
         _valida_ruota(ruota)
-    return analytics.tabellone_lotto(ruota, data_da, data_a, n_estrazioni, ritardo_min, ritardo_max)
+    return analytics.tabellone_lotto(ruota, data_da, data_a, n_estrazioni, ritardo_min, ritardo_max, stato, passo_k)
+
+
+@app.get("/analisi/isocronia")
+def analisi_isocronia() -> dict:
+    return analytics.matrice_isocronia_lotto()
+
+
+@app.post("/analisi/cache/invalidare")
+def analisi_cache_invalidare() -> dict:
+    """Svuota le @lru_cache di analytics.py (_passo_ritardo). Serve perché
+    lo scraping può partire anche da web/app.py (subprocess nel container
+    web, non passa per questo processo backend): senza un modo esplicito
+    per avvisarlo, la cache in-process del backend resterebbe stale finché
+    qualcuno non chiama /scraper/nuove o /scraper/refresh via API, o il
+    processo non viene riavviato. web/app.py chiama questo endpoint dopo
+    ogni pipeline riuscita, oltre a svuotare la propria cache locale."""
+    analytics.invalidare_cache_calcoli()
+    return {"status": "ok"}
 
 
 @app.post("/analisi/backtest")
 def analisi_backtest(
     numeri: list[int] = Body(..., embed=True),
     ruota: str = Body(..., embed=True),
+    sorte: str = Body("Ambo", embed=True),
     data_da: Optional[str] = Body(None, embed=True),
 ) -> dict:
     _valida_ruota(ruota)
     try:
-        return analytics.backtest_combinazione_lotto(numeri, ruota, data_da)
+        return analytics.backtest_combinazione_lotto(numeri, ruota, sorte, data_da)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/analisi/spia")
+def analisi_spia(
+    numero_spia: int = Body(..., embed=True, ge=1, le=90),
+    ruota_spia: str = Body(..., embed=True),
+    ruota_target: str = Body(..., embed=True),
+    orizzonte_h: int = Body(5, embed=True, ge=1, le=20),
+    data_da: Optional[str] = Body(None, embed=True),
+) -> dict:
+    _valida_ruota(ruota_spia)
+    _valida_ruota(ruota_target)
+    try:
+        return analytics.analisi_spia(numero_spia, ruota_spia, ruota_target, orizzonte_h, data_da)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -207,9 +248,13 @@ def scraper_nuove() -> dict:
     statistiche. Stessa logica invocata dal pannello di controllo di
     web/app.py (lì via subprocess) — qui in-process, dato che main.py
     gira già come processo Python dedicato sotto uvicorn."""
-    return pipeline.esegui_pipeline_nuove_estrazioni()
+    risultato = pipeline.esegui_pipeline_nuove_estrazioni()
+    analytics.invalidare_cache_calcoli()
+    return risultato
 
 
 @app.post("/scraper/refresh")
 def scraper_refresh() -> dict:
-    return pipeline.esegui_solo_refresh_cache()
+    risultato = pipeline.esegui_solo_refresh_cache()
+    analytics.invalidare_cache_calcoli()
+    return risultato

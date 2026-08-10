@@ -64,6 +64,15 @@ grazie al `SELECT` che `statistics_user` ha già a livello di schema.
 
 ## Changelog
 
+- **Performance**: `sp_refresh_lotto_ritardo()` ora materializza anche
+  `v_lotto_ritardo_attuale_tutte_ruote` in `cache_lotto_ritardo` con
+  `ruota='TUTTE'` (sentinella, non collide con le 11 sigle reali). Quella
+  vista da sola costava ~2,1s (EXPLAIN: 5 full table scan in UNION su
+  `v_lotto_estratti_flat`) — colpiva ogni lettura del Tabellone Analitico
+  della WebUI con ruota "Tutte". `ritardo_storico_max` per questa riga è
+  sempre 0: sentinella, non un vero record (indefinito aggregando 11
+  ruote diverse) — il consumer Python lo tratta esplicitamente come
+  assente, mai come zero reale.
 - **Performance**: aggiunta `cache_lotto_ritardo` + `sp_refresh_lotto_ritardo()`
   (sezione 2quater di `03_procedure_cache_lotto.sql`) per materializzare
   `v_lotto_indice_convenienza`, misurata a ~8,9s per lettura filtrata (era

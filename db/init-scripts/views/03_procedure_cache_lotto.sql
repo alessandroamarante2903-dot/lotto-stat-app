@@ -370,6 +370,17 @@ HAVING COUNT(*) > 1;
 -- estrazioni, invece di ricalcolare ad ogni lettura.
 -- =====================================================================
 
+-- Riga con ruota = 'TUTTE' (sentinella maiuscola, non collide con nessuna
+-- delle 11 sigle reali — vedi RUOTE_LOTTO): materializza anche
+-- v_lotto_ritardo_attuale_tutte_ruote, che da sola costa ~2,1s (misurato
+-- con EXPLAIN + timing diretto) perché scende su v_lotto_estratti_flat,
+-- 5 full table scan in UNION di estrazioni_lotto per spacchettare le
+-- colonne posizionali. Colpiva ogni lettura del Tabellone Analitico con
+-- ruota="Tutte" (backend/analytics.py) — inaccettabile per un modulo
+-- pensato come reattivo. ritardo_storico_max per questa riga è sempre 0
+-- (sentinella, non un vero record: il "record storico" non è definito in
+-- modo univoco aggregando 11 ruote diverse) — backend/analytics.py lo
+-- forza esplicitamente a None per questo ruota, non lo usa mai a 0.
 CREATE TABLE IF NOT EXISTS cache_lotto_ritardo (
     ruota                VARCHAR(20)      NOT NULL,
     numero               TINYINT UNSIGNED NOT NULL,
@@ -400,6 +411,13 @@ BEGIN
     INSERT INTO cache_lotto_ritardo (ruota, numero, ritardo_attuale, ritardo_storico_max, indice_convenienza)
     SELECT ruota, numero, ritardo_attuale, ritardo_storico_max, indice_convenienza
     FROM v_lotto_indice_convenienza;
+
+    -- Aggregato "tutte le ruote" (ruota='TUTTE'): riusa la vista as-is,
+    -- stesso pattern raccomandato nel README ("Nota sulle performance")
+    -- per qualunque vista lenta non ancora cachata.
+    INSERT INTO cache_lotto_ritardo (ruota, numero, ritardo_attuale, ritardo_storico_max, indice_convenienza)
+    SELECT 'TUTTE', numero, ritardo_attuale, 0, NULL
+    FROM v_lotto_ritardo_attuale_tutte_ruote;
 
     COMMIT;
 END$$
