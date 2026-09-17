@@ -21,53 +21,106 @@ import streamlit as st
 
 import api_client
 import filtri
+import ui_components as ui
 
-st.set_page_config(page_title="Numero Spia — Lotto", page_icon="🕵️", layout="wide")
-st.title("🕵️ Analisi di Frequenza Posizionale — Numero Spia")
+st.set_page_config(page_title="Numero Spia — Control Room", page_icon="🕵️", layout="wide")
 
 f = filtri.pannello_parametri(gioco_default="lotto")
+
+ui.render_header(
+    title="Analisi Frequenza Posizionale — Numero Spia",
+    subtitle=(
+        "Analisi empirica condizionata: individua i numeri che mostrano un'anomala attrazione "
+        "ad uscire nelle H estrazioni successive alla sortita di uno specifico numero spia."
+    ),
+    icon="🕵️",
+)
+filtri.render_active_filters_banner(f)
+
 if f.n_estrazioni is not None:
     st.caption(
-        "⚠️ Il preset 'Ultime N estrazioni' del Pannello Parametri non si applica a questo modulo "
-        "(serve tutto lo storico per raccogliere abbastanza occorrenze dello spia): per limitare il "
-        "periodo analizzato usa 'Range di date' nella sidebar."
+        "ℹ️ **Nota di campionamento**: il preset 'Ultime N estrazioni' viene ignorato per questo "
+        "modulo per garantire un campione statistico sufficientemente ampio (serve tutto lo "
+        "storico). Per circoscrivere il periodo, imposta 'Range di date' nella barra laterale."
     )
 RUOTE = [r for r in filtri.RUOTE_LOTTO if r != "Tutte"]
 
-col1, col2, col3, col4 = st.columns(4)
-numero_spia = col1.number_input("Numero Spia", min_value=1, max_value=90, value=1, key="spia_numero")
-ruota_spia = col2.selectbox("Ruota Spia", RUOTE, key="spia_ruota_spia")
-ruota_target = col3.selectbox("Ruota Target", RUOTE, key="spia_ruota_target")
-orizzonte_h = col4.select_slider("Orizzonte H", options=[3, 5, 9, 12, 18], value=5, key="spia_orizzonte")
+with st.container(border=True):
+    c_spia, c_r_spia, c_r_tar, c_h = st.columns([1, 1, 1, 1.2])
+    with c_spia:
+        numero_spia = st.number_input("Numero spia (1-90)", min_value=1, max_value=90, value=1, key="spia_numero")
+    with c_r_spia:
+        ruota_spia = st.selectbox("Ruota della spia", RUOTE, key="spia_ruota_spia")
+    with c_r_tar:
+        ruota_target = st.selectbox("Ruota target da osservare", RUOTE, key="spia_ruota_target")
+    with c_h:
+        orizzonte_h = st.select_slider("Orizzonte H (concorsi)", options=[3, 5, 9, 12, 18], value=5, key="spia_orizzonte")
 
-if st.button("🔍 Analizza"):
+col_ball, col_btn = st.columns([1, 3])
+with col_ball:
+    st.markdown(
+        "<div style='display: flex; align-items: center; gap: 10px; margin-top: 4px;'>"
+        "<span style='color: #94a3b8; font-size: 0.85rem; font-weight: 600;'>Spia attiva:</span>"
+        f"{ui.render_lotto_ball(numero_spia, variant='lotto', size='md')}"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+with col_btn:
+    btn_analizza = st.button("🔍 Avvia ricerca spia", type="primary")
+
+if btn_analizza:
     try:
         risultato = api_client.analisi_spia(numero_spia, ruota_spia, ruota_target, orizzonte_h, f.data_da)
     except ValueError as exc:
-        st.error(str(exc))
+        st.error(f"⚠️ {exc}")
     else:
+        st.write("")
+        n_occ = risultato["occorrenze_spia_utilizzate"]
         c1, c2, c3 = st.columns(3)
-        c1.metric("Occorrenze spia (campione)", risultato["occorrenze_spia_utilizzate"])
-        c2.metric("Frequenza naturale attesa", risultato["frequenza_naturale_attesa"])
-        c3.metric("Orizzonte H", risultato["orizzonte_h"])
+        c1.metric("Occorrenze spia utili", n_occ)
+        c2.metric("Attesa naturale", f"{risultato['frequenza_naturale_attesa']:.3f} uscite")
+        c3.metric("Orizzonte monitorato", f"{risultato['orizzonte_h']} concorsi successivi")
 
         if not risultato["campione_affidabile"]:
             st.warning(
-                f"Campione di sole {risultato['occorrenze_spia_utilizzate']} occorrenze utilizzabili "
-                "(soglia minima consigliata: 20): l'Indice di Attrattiva su un campione così piccolo "
-                "è statisticamente poco affidabile, va letto con cautela."
+                f"⚠️ **Campione ridotto ({n_occ} sortite utili, soglia consigliata ≥ 20)**: "
+                "l'Indice di Attrattiva su un campione così limitato è soggetto a elevata "
+                "variabilità casuale e va interpretato con cautela."
             )
+        else:
+            st.success(f"✅ **Campione statistico robusto ({n_occ} occorrenze)**: dati sufficienti per una stima attendibile.")
 
         df = pd.DataFrame(risultato["ranking"])
-        top10 = df.head(10)
-        st.plotly_chart(
-            px.bar(
-                top10, x="numero", y="indice_attrattiva",
-                title=f"Top 10 numeri per Indice di Attrattiva (spia {numero_spia} su {ruota_spia} → {ruota_target}, H={orizzonte_h})",
-                labels={"numero": "Numero target", "indice_attrattiva": "Indice di Attrattiva"},
-            ).add_hline(y=1.0, line_dash="dash", annotation_text="attesa naturale (1.0)"),
-            use_container_width=True,
-        )
+        top3 = df.head(3)["numero"].tolist()
+        if top3:
+            st.markdown("#### 🏆 Podio numeri più attratti:")
+            ui.render_balls_row(top3, variant="sen", size="lg")
 
-        st.subheader("Ranking completo")
-        st.dataframe(df, use_container_width=True, hide_index=True, height=500)
+        st.subheader(f"📊 Top 10 per Indice di Attrattiva (spia {numero_spia} su {ruota_spia} ➔ {ruota_target})")
+        top10 = df.head(10)
+        fig = px.bar(
+            top10, x="numero", y="indice_attrattiva",
+            labels={"numero": "Numero target", "indice_attrattiva": "Indice di Attrattiva"},
+            color="indice_attrattiva", color_continuous_scale="YlOrRd",
+        )
+        fig.add_hline(
+            y=1.0, line_dash="dash", line_color="#10B981", line_width=2,
+            annotation_text="Attesa naturale casuale (1.0x)", annotation_position="top left",
+        )
+        fig.update_coloraxes(showscale=False)
+        st.plotly_chart(ui.apply_plotly_theme(fig, height=360), use_container_width=True)
+
+        with st.expander("📋 Graduatoria completa dei 90 numeri", expanded=True):
+            st.dataframe(
+                df, use_container_width=True, hide_index=True, height=450,
+                column_config={
+                    "numero": st.column_config.NumberColumn("Numero", format="%02d"),
+                    "frequenza_post_spia": st.column_config.NumberColumn("Frequenza media post-spia", format="%.4f"),
+                    "indice_attrattiva": st.column_config.ProgressColumn(
+                        "Indice di attrattiva",
+                        help="Rapporto rispetto alla frequenza naturale (1.0 = neutrale)",
+                        format="%.2fx", min_value=0.0,
+                        max_value=max(float(df["indice_attrattiva"].max() or 0.0), 2.0),
+                    ),
+                },
+            )
