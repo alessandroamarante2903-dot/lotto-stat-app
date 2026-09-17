@@ -1,0 +1,247 @@
+/* =====================================================================
+   web/style.css — Design System per lotto-stat-app (Streamlit)
+   ===================================================================== */
+
+/* Palline del Lotto e SuperEnalotto */
+.lotto-balls-container {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    margin: 8px 0 14px 0;
+}
+
+.lotto-ball {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    font-weight: 700;
+    font-size: 0.95rem;
+    color: #ffffff;
+    background: radial-gradient(circle at 32% 32%, #fcd34d, #d97706 65%, #92400e 100%);
+    box-shadow: 0 3px 6px rgba(0, 0, 0, 0.4), inset 0 2px 3px rgba(255, 255, 255, 0.5), inset 0 -2px 3px rgba(0, 0, 0, 0.3);
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+    user-select: none;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.lotto-ball:hover {
+    transform: translateY(-2px) scale(1.05);
+    box-shadow: 0 5px 10px rgba(0, 0, 0, 0.5), inset 0 2px 3px rgba(255, 255, 255, 0.6);
+}
+
+.lotto-ball-sm {
+    width: 30px;
+    height: 30px;
+    font-size: 0.8rem;
+}
+
+.lotto-ball-lg {
+    width: 48px;
+    height: 48px;
+    font-size: 1.25rem;
+}
+
+.lotto-ball-sen {
+    background: radial-gradient(circle at 32% 32%, #6ee7b7, #059669 65%, #064e3b 100%);
+}
+
+.lotto-ball-jolly {
+    background: radial-gradient(circle at 32% 32%, #fca5a5, #dc2626 65%, #7f1d1d 100%);
+}
+
+.lotto-ball-superstar {
+    background: radial-gradient(circle at 32% 32%, #c4b5fd, #7c3aed 65%, #4c1d95 100%);
+}
+
+.lotto-ball-neutral {
+    background: radial-gradient(circle at 32% 32%, #94a3b8, #475569 65%, #1e293b 100%);
+    color: #f1f5f9;
+}
+
+/* Card metriche personalizzate */
+.app-card {
+    background: linear-gradient(145deg, #1e293b, #0f172a);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    padding: 18px 20px;
+    margin-bottom: 16px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+    transition: border-color 0.2s ease, transform 0.2s ease;
+}
+
+.app-card:hover {
+    border-color: rgba(245, 158, 11, 0.35);
+}
+
+.app-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.app-card-title {
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #94a3b8;
+    font-weight: 600;
+}
+
+.app-card-value {
+    font-size: 1.85rem;
+    font-weight: 700;
+    color: #f8fafc;
+    line-height: 1.2;
+}
+
+.app-card-subtext {
+    font-size: 0.8rem;
+    color: #64748b;
+    margin-top: 6px;
+}
+
+/* Chip di stato e badge */
+.status-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 12px;
+    border-radius: 9999px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    line-height: 1;
+    border: 1px solid transparent;
+}
+
+.status-chip-green {
+    background: rgba(16, 185, 129, 0.15);
+    color: #34d399;
+    border-color: rgba(16, 185, 129, 0.3);
+}
+
+.status-chip-amber {
+    background: rgba(245, 158, 11, 0.15);
+    color: #fbbf24;
+    border-color: rgba(245, 158, 11, 0.3);
+}
+
+.status-chip-red {
+    background: rgba(239, 68, 68, 0.15);
+    color: #f87171;
+    border-color: rgba(239, 68, 68, 0.3);
+}
+
+.status-chip-blue {
+    background: rgba(59, 130, 246, 0.15);
+    color: #60a5fa;
+    border-color: rgba(59, 130, 246, 0.3);
+}
+
+.status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+}
+
+.status-dot-green { background-color: #10b981; box-shadow: 0 0 6px #10b981; }
+.status-dot-amber { background-color: #f59e0b; box-shadow: 0 0 6px #f59e0b; }
+.status-dot-red   { background-color: #ef4444; box-shadow: 0 0 6px #ef4444; }
+
+/* Banner Hero in testata */
+.hero-header {
+    background: linear-gradient(135deg, rgba(30, 41, 59, 0.85) 0%, rgba(15, 23, 42, 0.95) 100%);
+    border: 1px solid rgba(245, 158, 11, 0.25);
+    border-radius: 14px;
+    padding: 22px 26px;
+    margin-bottom: 24px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.hero-title {
+    font-size: 1.75rem;
+    font-weight: 800;
+    color: #f8fafc;
+    margin: 0 0 6px 0;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.hero-subtitle {
+    font-size: 0.92rem;
+    color: #94a3b8;
+    margin: 0;
+    max-width: 850px;
+    line-height: 1.5;
+}
+
+/* Quick Navigation Links */
+.quick-nav-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 14px;
+    margin: 16px 0 24px 0;
+}
+
+.quick-nav-card {
+    background: rgba(30, 41, 59, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 10px;
+    padding: 14px 16px;
+    text-decoration: none;
+    color: inherit;
+    transition: all 0.2s ease;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.quick-nav-card:hover {
+    background: rgba(30, 41, 59, 0.95);
+    border-color: #f59e0b;
+    transform: translateY(-2px);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.3);
+}
+
+.quick-nav-icon {
+    font-size: 1.4rem;
+}
+
+.quick-nav-label {
+    font-weight: 700;
+    font-size: 0.95rem;
+    color: #f8fafc;
+}
+
+.quick-nav-desc {
+    font-size: 0.78rem;
+    color: #94a3b8;
+    line-height: 1.35;
+}
+
+/* Comparatore di Risparmio Sistemi */
+.savings-badge {
+    display: inline-block;
+    background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+    color: #ffffff;
+    font-weight: 700;
+    font-size: 0.85rem;
+    padding: 6px 14px;
+    border-radius: 8px;
+    margin-top: 8px;
+    box-shadow: 0 2px 8px rgba(16, 185, 129, 0.35);
+}
+
+/* Migliorie grafiche tabelle Streamlit */
+div[data-testid="stDataFrame"] {
+    border-radius: 10px;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
