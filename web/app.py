@@ -3,12 +3,18 @@ web/app.py
 ==========
 
 Frontend Streamlit di lotto-stat-app (container lotto_stat_web):
-  - Tab "Statistiche": ritardatari, frequenze e ambi da Lotto e SuperEnalotto.
-  - Tab "Calcolatore & Sistemi": preventivo costi ADM, Sistemi Integrali e Ridotti.
-  - Tab "Gestione Scraper": stato archivio + trigger on-demand della pipeline
+  - Tab "Statistiche Live": ritardatari, frequenze e ambi da Lotto e
+    SuperEnalotto, con grafici e tabelle a barre di avanzamento.
+  - Tab "Calcolatore & Sistemi": preventivo costi ADM, schedina con palline
+    grafiche, Sistemi Integrali e Ridotti.
+  - Tab "Gestione & Scraper": stato archivio + trigger on-demand della pipeline
     di scraping (scraper/update_pipeline.py), eseguita come sottoprocesso
     Python nello stesso container (nessun bisogno di un container scraper
     separato: backend/ e scraper/ sono montati anche qui, vedi podman-compose.yml).
+
+Tutta la presentazione (CSS, testata, palline, tema dei grafici, navigazione
+verso i moduli parametrici) sta in web/ui_components.py, condivisa con le
+pagine sotto web/pages/.
 """
 
 from __future__ import annotations
@@ -23,8 +29,15 @@ import streamlit as st
 import api_client
 import calcolo_costi as costi
 import db
+import ui_components as ui
 
-st.set_page_config(page_title="Lotto & SuperEnalotto — Statistiche", page_icon="🎱", layout="wide")
+# Deve restare la PRIMA chiamata Streamlit del file.
+st.set_page_config(
+    page_title="Lotto & SuperEnalotto — Control Room",
+    page_icon="🎱",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
 UPDATE_PIPELINE_PATH = Path(__file__).resolve().parent / "scraper" / "update_pipeline.py"
 # Misurato in pratica su storico reale (Lotto dal 1939 + SuperEnalotto):
@@ -33,69 +46,156 @@ UPDATE_PIPELINE_PATH = Path(__file__).resolve().parent / "scraper" / "update_pip
 # refresh riuscito. Margine ampio perché la durata cresce con lo storico.
 TIMEOUT_PIPELINE_SECONDI = 600
 
-st.title("🎱 Lotto & SuperEnalotto — Statistiche")
+# Unica query di stato archivio, usata sia per i badge di testata sia per il
+# riepilogo del tab "Gestione & Scraper" (db.query_df è cachata: una sola
+# andata al DB per rerun).
+SQL_STATO_ARCHIVIO = """
+    SELECT
+        (SELECT MAX(data_estrazione) FROM estrazioni_lotto) AS ultima_estrazione_lotto,
+        (SELECT COUNT(*) FROM estrazioni_lotto) AS righe_lotto,
+        (SELECT MAX(data_estrazione) FROM estrazioni_superenalotto) AS ultima_estrazione_superenalotto,
+        (SELECT COUNT(*) FROM estrazioni_superenalotto) AS righe_superenalotto
+"""
+
+ui.inject_custom_css()
+
+df_stato = db.query_df(SQL_STATO_ARCHIVIO)
+
+badges_testata: list[tuple[str, str]] = []
+if not df_stato.empty:
+    riga_stato = df_stato.iloc[0]
+    if riga_stato["ultima_estrazione_lotto"] is not None:
+        badges_testata.append((f"Lotto: {riga_stato['ultima_estrazione_lotto']}", "amber"))
+    if riga_stato["ultima_estrazione_superenalotto"] is not None:
+        badges_testata.append((f"SuperEnalotto: {riga_stato['ultima_estrazione_superenalotto']}", "green"))
+    badges_testata.append(("DB: connesso", "blue"))
+
+ui.render_header(
+    title="Lotto & SuperEnalotto — Control Room Statistica",
+    subtitle=(
+        "Dashboard statistica, combinatoria di gioco, sistemi ridotti e "
+        "monitoraggio dell'archivio in tempo reale."
+    ),
+    icon="🎱",
+    badges=badges_testata,
+)
+
+ui.render_quick_nav()
+st.write("")
 
 tab_statistiche, tab_calcolatore, tab_scraper = st.tabs(
-    ["📊 Statistiche", "🎯 Calcolatore & Sistemi", "⚙️ Gestione Scraper"]
+    ["📊 Statistiche Live", "🎯 Calcolatore & Sistemi", "⚙️ Gestione & Scraper"]
 )
 
 # =====================================================================
-# TAB 1 — STATISTICHE
+# TAB 1 — STATISTICHE LIVE
 # =====================================================================
 with tab_statistiche:
-    gioco = st.radio("Gioco", ["Lotto", "SuperEnalotto"], horizontal=True, key="gioco_statistiche")
+    col_gioco, _ = st.columns([1, 2])
+    with col_gioco:
+        gioco = st.radio(
+            "Seleziona gioco", ["Lotto", "SuperEnalotto"],
+            horizontal=True, key="gioco_statistiche",
+        )
 
     if gioco == "Lotto":
-        col_sel, _ = st.columns([1, 3])
-        with col_sel:
-            ruota = st.selectbox("Ruota", list(costi.RUOTE_LOTTO), key="ruota_statistiche")
-            top_n = st.slider("Quanti numeri mostrare", 5, 90, 10, key="topn_lotto")
+        with st.container(border=True):
+            col_sel, col_top = st.columns([1, 2])
+            with col_sel:
+                ruota = st.selectbox("Ruota di estrazione", list(costi.RUOTE_LOTTO), key="ruota_statistiche")
+            with col_top:
+                top_n = st.slider("Quanti numeri mostrare", 5, 90, 10, key="topn_lotto")
 
-        st.subheader(f"Ritardatari — ruota {ruota}")
-        df_ritardo = db.query_df(
-            """
-            SELECT numero, ritardo_attuale, ritardo_storico_max, indice_convenienza
-            FROM cache_lotto_ritardo
-            WHERE ruota = %s
-            ORDER BY ritardo_attuale DESC
-            LIMIT %s
-            """,
-            (ruota, top_n),
-        )
-        if df_ritardo.empty:
-            st.info(
-                "Nessun dato disponibile: verifica che lo storico sia stato importato e che la cache "
-                "ritardi sia stata popolata (Tab 'Gestione Scraper' → refresh cache)."
+        col_rit, col_frq = st.columns(2)
+
+        with col_rit:
+            st.subheader(f"⏳ Top {top_n} ritardatari — {ruota}")
+            df_ritardo = db.query_df(
+                """
+                SELECT numero, ritardo_attuale, ritardo_storico_max, indice_convenienza
+                FROM cache_lotto_ritardo
+                WHERE ruota = %s
+                ORDER BY ritardo_attuale DESC
+                LIMIT %s
+                """,
+                (ruota, top_n),
             )
-        else:
-            st.plotly_chart(
-                px.bar(
+            if df_ritardo.empty:
+                st.info(
+                    "Nessun dato disponibile: verifica che lo storico sia stato importato e che la cache "
+                    "ritardi sia stata popolata (Tab 'Gestione & Scraper' → refresh cache)."
+                )
+            else:
+                fig_rit = px.bar(
                     df_ritardo, x="numero", y="ritardo_attuale",
                     hover_data=["ritardo_storico_max", "indice_convenienza"],
                     labels={"numero": "Numero", "ritardo_attuale": "Ritardo (estrazioni)"},
-                ),
-                use_container_width=True,
-            )
-            st.dataframe(df_ritardo, use_container_width=True, hide_index=True)
+                    color="ritardo_attuale", color_continuous_scale="YlOrRd",
+                )
+                fig_rit.update_coloraxes(showscale=False)
+                st.plotly_chart(ui.apply_plotly_theme(fig_rit, height=320), use_container_width=True)
 
-        st.subheader(f"Frequenze — ruota {ruota}")
-        df_freq = db.query_df(
-            """
-            SELECT numero, frequenza, frequenza_relativa
-            FROM cache_lotto_frequenza
-            WHERE ruota = %s
-            ORDER BY frequenza DESC
-            LIMIT %s
-            """,
-            (ruota, top_n),
-        )
-        if not df_freq.empty:
-            st.plotly_chart(
-                px.bar(df_freq, x="numero", y="frequenza", labels={"numero": "Numero", "frequenza": "Frequenza"}),
-                use_container_width=True,
-            )
+                max_rit = int(df_ritardo["ritardo_attuale"].max() or 0)
+                st.dataframe(
+                    df_ritardo,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "numero": st.column_config.NumberColumn("Numero", format="%02d"),
+                        "ritardo_attuale": st.column_config.ProgressColumn(
+                            "Ritardo attuale",
+                            help="Estrazioni consecutive di assenza (mai giorni di calendario)",
+                            format="%d estr.",
+                            min_value=0,
+                            max_value=max(max_rit, 1),
+                        ),
+                        "ritardo_storico_max": st.column_config.NumberColumn("Max storico", format="%d estr."),
+                        "indice_convenienza": st.column_config.NumberColumn("Indice conv.", format="%.2f"),
+                    },
+                )
 
-        st.subheader(f"Ambi più ritardatari — ruota {ruota} (dalla cache)")
+        with col_frq:
+            st.subheader(f"🔥 Top {top_n} più frequenti — {ruota}")
+            df_freq = db.query_df(
+                """
+                SELECT numero, frequenza, frequenza_relativa
+                FROM cache_lotto_frequenza
+                WHERE ruota = %s
+                ORDER BY frequenza DESC
+                LIMIT %s
+                """,
+                (ruota, top_n),
+            )
+            if df_freq.empty:
+                st.info("Cache frequenze non ancora popolata: lancia il refresh dal tab 'Gestione & Scraper'.")
+            else:
+                fig_frq = px.bar(
+                    df_freq, x="numero", y="frequenza",
+                    labels={"numero": "Numero", "frequenza": "Uscite totali"},
+                    color="frequenza", color_continuous_scale="Teal",
+                )
+                fig_frq.update_coloraxes(showscale=False)
+                st.plotly_chart(ui.apply_plotly_theme(fig_frq, height=320), use_container_width=True)
+
+                max_frq = int(df_freq["frequenza"].max() or 0)
+                st.dataframe(
+                    df_freq,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "numero": st.column_config.NumberColumn("Numero", format="%02d"),
+                        "frequenza": st.column_config.ProgressColumn(
+                            "Frequenza assoluta",
+                            format="%d uscite",
+                            min_value=0,
+                            max_value=max(max_frq, 1),
+                        ),
+                        "frequenza_relativa": st.column_config.NumberColumn("Freq. relativa", format="%.4f"),
+                    },
+                )
+
+        st.write("")
+        st.subheader(f"👥 Ambi più ritardatari — {ruota} (dalla cache)")
         df_ambi = db.query_df(
             """
             SELECT numero1, numero2, ritardo_attuale, frequenza
@@ -107,16 +207,27 @@ with tab_statistiche:
             (ruota, top_n),
         )
         if df_ambi.empty:
-            st.info("Cache Ambi non ancora popolata: vai al Tab 'Gestione Scraper' e lancia il refresh cache.")
+            st.info("Cache Ambi non ancora popolata: lancia il refresh dal tab 'Gestione & Scraper'.")
         else:
-            st.dataframe(df_ambi, use_container_width=True, hide_index=True)
+            st.dataframe(
+                df_ambi,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "numero1": st.column_config.NumberColumn("Primo numero", format="%02d"),
+                    "numero2": st.column_config.NumberColumn("Secondo numero", format="%02d"),
+                    "ritardo_attuale": st.column_config.NumberColumn("Ritardo attuale", format="%d estr."),
+                    "frequenza": st.column_config.NumberColumn("Frequenza storica", format="%d uscite"),
+                },
+            )
 
     else:  # SuperEnalotto
-        top_n = st.slider("Quanti numeri mostrare", 5, 90, 10, key="topn_sen")
+        with st.container(border=True):
+            top_n = st.slider("Quanti numeri mostrare", 5, 90, 10, key="topn_sen")
 
         col_a, col_b = st.columns(2)
         with col_a:
-            st.subheader("Frequenza sestina (era INDIPENDENTE)")
+            st.subheader(f"🔥 Top {top_n} frequenza sestina (era INDIPENDENTE)")
             df_freq_sen = db.query_df(
                 """
                 SELECT numero, frequenza, frequenza_relativa
@@ -129,10 +240,33 @@ with tab_statistiche:
             if df_freq_sen.empty:
                 st.info("Nessun dato disponibile.")
             else:
-                st.plotly_chart(px.bar(df_freq_sen, x="numero", y="frequenza"), use_container_width=True)
+                fig_sen_f = px.bar(
+                    df_freq_sen, x="numero", y="frequenza",
+                    labels={"numero": "Numero", "frequenza": "Uscite totali"},
+                    color="frequenza", color_continuous_scale="Emrld",
+                )
+                fig_sen_f.update_coloraxes(showscale=False)
+                st.plotly_chart(ui.apply_plotly_theme(fig_sen_f, height=320), use_container_width=True)
+
+                max_sen_f = int(df_freq_sen["frequenza"].max() or 0)
+                st.dataframe(
+                    df_freq_sen,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "numero": st.column_config.NumberColumn("Numero", format="%02d"),
+                        "frequenza": st.column_config.ProgressColumn(
+                            "Frequenza sestina",
+                            format="%d uscite",
+                            min_value=0,
+                            max_value=max(max_sen_f, 1),
+                        ),
+                        "frequenza_relativa": st.column_config.NumberColumn("Freq. relativa", format="%.4f"),
+                    },
+                )
 
         with col_b:
-            st.subheader("Ritardo sestina (azzerato al 2009)")
+            st.subheader(f"⏳ Top {top_n} ritardi sestina (azzerato al 2009)")
             df_rit_sen = db.query_df(
                 """
                 SELECT numero, ritardo_attuale
@@ -142,118 +276,211 @@ with tab_statistiche:
                 """,
                 (top_n,),
             )
-            if not df_rit_sen.empty:
-                st.plotly_chart(px.bar(df_rit_sen, x="numero", y="ritardo_attuale"), use_container_width=True)
+            if df_rit_sen.empty:
+                st.info("Nessun dato disponibile.")
+            else:
+                fig_sen_r = px.bar(
+                    df_rit_sen, x="numero", y="ritardo_attuale",
+                    labels={"numero": "Numero", "ritardo_attuale": "Ritardo (concorsi)"},
+                    color="ritardo_attuale", color_continuous_scale="YlOrRd",
+                )
+                fig_sen_r.update_coloraxes(showscale=False)
+                st.plotly_chart(ui.apply_plotly_theme(fig_sen_r, height=320), use_container_width=True)
 
-        st.subheader("Curva a campana — somma della sestina (era INDIPENDENTE)")
-        df_somma = db.query_df(
-            """
-            SELECT fascia_somma_da, frequenza
-            FROM v_sen_somma_distribuzione
-            WHERE tipo_regolamento = 'INDIPENDENTE'
-            ORDER BY fascia_somma_da
-            """
-        )
-        if not df_somma.empty:
-            st.plotly_chart(
-                px.line(
+                max_sen_r = int(df_rit_sen["ritardo_attuale"].max() or 0)
+                st.dataframe(
+                    df_rit_sen,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "numero": st.column_config.NumberColumn("Numero", format="%02d"),
+                        "ritardo_attuale": st.column_config.ProgressColumn(
+                            "Ritardo (concorsi)",
+                            format="%d",
+                            min_value=0,
+                            max_value=max(max_sen_r, 1),
+                        ),
+                    },
+                )
+
+        st.write("")
+        col_som, col_pd = st.columns(2)
+
+        with col_som:
+            st.subheader("🔔 Curva a campana — somma della sestina (era INDIPENDENTE)")
+            df_somma = db.query_df(
+                """
+                SELECT fascia_somma_da, frequenza
+                FROM v_sen_somma_distribuzione
+                WHERE tipo_regolamento = 'INDIPENDENTE'
+                ORDER BY fascia_somma_da
+                """
+            )
+            if df_somma.empty:
+                st.info("Nessun dato disponibile.")
+            else:
+                fig_som = px.area(
                     df_somma, x="fascia_somma_da", y="frequenza", markers=True,
                     labels={"fascia_somma_da": "Somma sestina (fascia da 20)", "frequenza": "Frequenza"},
-                ),
-                use_container_width=True,
-            )
+                )
+                fig_som.update_traces(line_color="#10B981", fillcolor="rgba(16, 185, 129, 0.2)")
+                st.plotly_chart(ui.apply_plotly_theme(fig_som, height=320), use_container_width=True)
 
-        st.subheader("Distribuzione pari/dispari (era INDIPENDENTE)")
-        df_pd = db.query_df(
-            """
-            SELECT conteggio_pari, conteggio_dispari, frequenza
-            FROM v_sen_pari_dispari_distribuzione
-            WHERE tipo_regolamento = 'INDIPENDENTE'
-            ORDER BY frequenza DESC
-            """
-        )
-        if not df_pd.empty:
-            st.dataframe(df_pd, use_container_width=True, hide_index=True)
+        with col_pd:
+            st.subheader("⚖️ Distribuzione pari/dispari (era INDIPENDENTE)")
+            df_pd = db.query_df(
+                """
+                SELECT conteggio_pari, conteggio_dispari, frequenza
+                FROM v_sen_pari_dispari_distribuzione
+                WHERE tipo_regolamento = 'INDIPENDENTE'
+                ORDER BY frequenza DESC
+                """
+            )
+            if df_pd.empty:
+                st.info("Nessun dato disponibile.")
+            else:
+                st.dataframe(
+                    df_pd,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "conteggio_pari": st.column_config.NumberColumn("Pari"),
+                        "conteggio_dispari": st.column_config.NumberColumn("Dispari"),
+                        "frequenza": st.column_config.ProgressColumn(
+                            "Occorrenze",
+                            format="%d",
+                            min_value=0,
+                            max_value=max(int(df_pd["frequenza"].max() or 0), 1),
+                        ),
+                    },
+                )
 
 
 # =====================================================================
 # TAB 2 — CALCOLATORE & SISTEMI
 # =====================================================================
 with tab_calcolatore:
-    gioco_calc = st.radio("Gioco", ["SuperEnalotto", "Lotto"], horizontal=True, key="gioco_calcolatore")
+    gioco_calc = st.radio(
+        "Seleziona gioco per il preventivo", ["SuperEnalotto", "Lotto"],
+        horizontal=True, key="gioco_calcolatore",
+    )
 
     if gioco_calc == "SuperEnalotto":
         st.caption(
-            f"Quota ufficiale ADM: {costi.QUOTA_UNITARIA_SUPERENALOTTO:.2f} €/colonna "
-            "(1,00 € puntata + 0,25 € quota Stato)."
+            f"Quota ufficiale ADM: **{costi.QUOTA_UNITARIA_SUPERENALOTTO:.2f} €**/colonna "
+            "(1,00 € puntata + 0,25 € quota erariale dello Stato)."
         )
-        numeri_sen = st.multiselect("Numeri selezionati (min. 6)", options=list(range(1, 91)), key="numeri_sen")
-        tipo_sistema = st.radio("Tipo di sistema", ["Integrale", "Ridotto (euristico)"], horizontal=True, key="tipo_sistema_sen")
 
-        if tipo_sistema == "Ridotto (euristico)":
-            garanzia_label = st.selectbox(
-                "Garanzia minima", ["Ambo (2)", "Terno (3)", "Quaterna (4)", "Cinquina (5)"], key="garanzia_sen",
+        with st.container(border=True):
+            numeri_sen = st.multiselect(
+                "Numeri selezionati (min. 6)", options=list(range(1, 91)), key="numeri_sen",
             )
-            garanzia = {"Ambo (2)": 2, "Terno (3)": 3, "Quaterna (4)": 4, "Cinquina (5)": 5}[garanzia_label]
-            st.caption(
-                "⚠️ Riduzione euristica (covering design greedy), NON le tabelle di riduzione "
-                "ufficiali Sisal (proprietarie e non pubblicate in formato machine-readable): "
-                "garantisce comunque, per costruzione, che ogni combinazione dei numeri scelti "
-                "con la garanzia indicata sia coperta da almeno una colonna giocata."
-            )
+            if numeri_sen:
+                ui.render_balls_row(
+                    numeri_sen, variant="sen",
+                    title=f"Schedina selezionata ({len(numeri_sen)} numeri):",
+                )
 
-        if st.button("Calcola", key="calcola_sen"):
+            col_tipo, col_gar = st.columns(2)
+            with col_tipo:
+                tipo_sistema = st.radio(
+                    "Tipo di sistema", ["Integrale", "Ridotto (euristico)"],
+                    horizontal=True, key="tipo_sistema_sen",
+                )
+
+            garanzia = 2
+            if tipo_sistema == "Ridotto (euristico)":
+                with col_gar:
+                    garanzia_label = st.selectbox(
+                        "Garanzia minima",
+                        ["Ambo (2)", "Terno (3)", "Quaterna (4)", "Cinquina (5)"],
+                        key="garanzia_sen",
+                    )
+                    garanzia = {"Ambo (2)": 2, "Terno (3)": 3, "Quaterna (4)": 4, "Cinquina (5)": 5}[garanzia_label]
+                st.caption(
+                    "⚠️ Riduzione euristica (covering design greedy), NON le tabelle di riduzione "
+                    "ufficiali Sisal (proprietarie e non pubblicate in formato machine-readable): "
+                    "garantisce comunque, per costruzione, che ogni combinazione dei numeri scelti "
+                    "con la garanzia indicata sia coperta da almeno una colonna giocata."
+                )
+
+        if st.button("🚀 Calcola colonne e costo", key="calcola_sen", type="primary"):
             try:
                 if tipo_sistema == "Integrale":
                     risultato = costi.sistema_integrale_superenalotto(numeri_sen)
                 else:
                     risultato = costi.sistema_ridotto_superenalotto(numeri_sen, garanzia=garanzia)
             except costi.CalcoloCostiError as exc:
-                st.error(str(exc))
+                st.error(f"⚠️ {exc}")
             else:
-                c1, c2 = st.columns(2)
+                c1, c2, c3 = st.columns(3)
                 c1.metric("Colonne da giocare", risultato["numero_colonne"])
-                c2.metric("Costo totale", f"{risultato['costo_totale_euro']:.2f} €")
+                c2.metric("Costo totale ADM", f"{risultato['costo_totale_euro']:.2f} €")
                 if risultato["tipo"] == "ridotto":
-                    st.caption(
-                        f"Il sistema integrale equivalente su questi {len(risultato['numeri'])} numeri "
-                        f"richiederebbe {risultato['colonne_sistema_integrale_equivalente']} colonne "
-                        f"({risultato['colonne_sistema_integrale_equivalente'] * costi.QUOTA_UNITARIA_SUPERENALOTTO:.2f} €)."
+                    colonne_integrale = risultato["colonne_sistema_integrale_equivalente"]
+                    costo_integrale = colonne_integrale * costi.QUOTA_UNITARIA_SUPERENALOTTO
+                    risparmio_euro = costo_integrale - risultato["costo_totale_euro"]
+                    risparmio_pct = (risparmio_euro / costo_integrale * 100) if costo_integrale else 0.0
+                    c3.metric("Risparmio", f"{risparmio_euro:.2f} €", delta=f"-{risparmio_pct:.1f}%")
+
+                    st.markdown(
+                        f"<div class='savings-badge'>🎉 Risparmi il <b>{risparmio_pct:.1f}%</b> rispetto al "
+                        f"sistema integrale equivalente su questi {len(risultato['numeri'])} numeri "
+                        f"({colonne_integrale} colonne, {costo_integrale:.2f} €), mantenendo la garanzia richiesta.</div>",
+                        unsafe_allow_html=True,
                     )
+
+                    st.write("")
                     if risultato["numero_colonne"] <= 200:
-                        st.dataframe(
-                            [{"colonna": i + 1, "numeri": " - ".join(f"{n:02d}" for n in col)}
-                             for i, col in enumerate(risultato["colonne"])],
-                            use_container_width=True, hide_index=True,
-                        )
+                        with st.expander(f"📋 Le {risultato['numero_colonne']} colonne sviluppate", expanded=True):
+                            st.dataframe(
+                                [{"Colonna": f"#{i + 1:03d}", "Numeri": "  —  ".join(f"{n:02d}" for n in col)}
+                                 for i, col in enumerate(risultato["colonne"])],
+                                use_container_width=True, hide_index=True,
+                            )
                     else:
                         st.info(f"{risultato['numero_colonne']} colonne generate: elenco non mostrato (troppo lungo).")
 
     else:  # Lotto
         st.caption(
-            f"Puntata minima ADM: {costi.QUOTA_MINIMA_LOTTO:.2f} €/colonna/ruota, "
-            f"in multipli di {costi.INCREMENTO_PUNTATA_LOTTO:.2f} €."
-        )
-        numeri_lotto = st.multiselect("Numeri selezionati", options=list(range(1, 91)), key="numeri_lotto")
-        sorte_label = st.selectbox(
-            "Sorte", ["Estratto", "Ambo", "Terno", "Quaterna", "Cinquina"], key="sorte_lotto",
-        )
-        tutte_le_ruote = st.checkbox("Tutte le ruote", key="tutte_ruote_lotto")
-        if tutte_le_ruote:
-            ruote_scelte = list(costi.RUOTE_LOTTO)
-            st.multiselect("Ruote", options=list(costi.RUOTE_LOTTO), default=ruote_scelte, disabled=True, key="ruote_lotto_disabled")
-        else:
-            ruote_scelte = st.multiselect("Ruote", options=list(costi.RUOTE_LOTTO), key="ruote_lotto")
-        puntata_unitaria = st.number_input(
-            "Puntata unitaria (€)", min_value=costi.QUOTA_MINIMA_LOTTO, step=costi.INCREMENTO_PUNTATA_LOTTO,
-            value=costi.QUOTA_MINIMA_LOTTO, key="puntata_lotto",
+            f"Puntata minima ADM: **{costi.QUOTA_MINIMA_LOTTO:.2f} €**/colonna/ruota, "
+            f"in multipli di **{costi.INCREMENTO_PUNTATA_LOTTO:.2f} €**."
         )
 
-        if st.button("Calcola", key="calcola_lotto"):
+        with st.container(border=True):
+            numeri_lotto = st.multiselect(
+                "Numeri selezionati", options=list(range(1, 91)), key="numeri_lotto",
+            )
+            if numeri_lotto:
+                ui.render_balls_row(
+                    numeri_lotto, variant="lotto",
+                    title=f"Schedina selezionata ({len(numeri_lotto)} numeri):",
+                )
+
+            col_sorte, col_ruote, col_puntata = st.columns(3)
+            with col_sorte:
+                sorte_label = st.selectbox(
+                    "Sorte", ["Estratto", "Ambo", "Terno", "Quaterna", "Cinquina"], key="sorte_lotto",
+                )
+            with col_ruote:
+                tutte_le_ruote = st.checkbox("Tutte le ruote", key="tutte_ruote_lotto")
+                if tutte_le_ruote:
+                    ruote_scelte = list(costi.RUOTE_LOTTO)
+                    st.caption(f"Selezionate tutte le {len(ruote_scelte)} ruote.")
+                else:
+                    ruote_scelte = st.multiselect("Ruote", options=list(costi.RUOTE_LOTTO), key="ruote_lotto")
+            with col_puntata:
+                puntata_unitaria = st.number_input(
+                    "Puntata unitaria (€)", min_value=costi.QUOTA_MINIMA_LOTTO,
+                    step=costi.INCREMENTO_PUNTATA_LOTTO, value=costi.QUOTA_MINIMA_LOTTO,
+                    key="puntata_lotto",
+                )
+
+        if st.button("🚀 Calcola colonne e costo", key="calcola_lotto", type="primary"):
             try:
                 risultato = costi.costo_lotto(numeri_lotto, sorte_label, ruote_scelte, puntata_unitaria)
             except costi.CalcoloCostiError as exc:
-                st.error(str(exc))
+                st.error(f"⚠️ {exc}")
             else:
                 c1, c2, c3 = st.columns(3)
                 c1.metric("Colonne per ruota", risultato["colonne_per_ruota"])
@@ -266,7 +493,7 @@ with tab_calcolatore:
 
 
 # =====================================================================
-# TAB 3 — GESTIONE SCRAPER
+# TAB 3 — GESTIONE & SCRAPER
 # =====================================================================
 def _esegui_pipeline(argomenti: list[str]) -> tuple[int, str]:
     comando = [sys.executable, str(UPDATE_PIPELINE_PATH), *argomenti]
@@ -277,17 +504,18 @@ def _esegui_pipeline(argomenti: list[str]) -> tuple[int, str]:
 
 with tab_scraper:
     st.subheader("Stato archivio")
-    df_stato = db.query_df(
-        """
-        SELECT
-            (SELECT MAX(data_estrazione) FROM estrazioni_lotto) AS ultima_estrazione_lotto,
-            (SELECT COUNT(*) FROM estrazioni_lotto) AS righe_lotto,
-            (SELECT MAX(data_estrazione) FROM estrazioni_superenalotto) AS ultima_estrazione_superenalotto,
-            (SELECT COUNT(*) FROM estrazioni_superenalotto) AS righe_superenalotto
-        """
-    )
     if not df_stato.empty:
-        st.dataframe(df_stato, use_container_width=True, hide_index=True)
+        st.dataframe(
+            df_stato,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "ultima_estrazione_lotto": st.column_config.TextColumn("Ultima estrazione Lotto"),
+                "righe_lotto": st.column_config.NumberColumn("Righe Lotto", format="%d"),
+                "ultima_estrazione_superenalotto": st.column_config.TextColumn("Ultima estrazione SuperEnalotto"),
+                "righe_superenalotto": st.column_config.NumberColumn("Righe SuperEnalotto", format="%d"),
+            },
+        )
 
     st.divider()
     st.subheader("Pannello di controllo")

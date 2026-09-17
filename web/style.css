@@ -152,6 +152,7 @@
 .status-dot-green { background-color: #10b981; box-shadow: 0 0 6px #10b981; }
 .status-dot-amber { background-color: #f59e0b; box-shadow: 0 0 6px #f59e0b; }
 .status-dot-red   { background-color: #ef4444; box-shadow: 0 0 6px #ef4444; }
+.status-dot-blue  { background-color: #3b82f6; box-shadow: 0 0 6px #3b82f6; }
 
 /* Banner Hero in testata */
 .hero-header {

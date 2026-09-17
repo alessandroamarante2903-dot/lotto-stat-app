@@ -9,3 +9,14 @@ fileWatcherType = "none"
 
 [browser]
 gatherUsageStats = false
+
+# Tema "Control Room": palette dark coerente con web/style.css (gli helper
+# di web/ui_components.py assumono sfondo scuro, sia nel CSS iniettato sia
+# nel template plotly_dark applicato da apply_plotly_theme()).
+[theme]
+base = "dark"
+primaryColor = "#F59E0B"
+backgroundColor = "#0B1120"
+secondaryBackgroundColor = "#1E293B"
+textColor = "#F8FAFC"
+font = "sans serif"
