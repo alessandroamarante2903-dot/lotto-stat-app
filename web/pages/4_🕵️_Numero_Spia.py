@@ -20,6 +20,7 @@ import plotly.express as px
 import streamlit as st
 
 import api_client
+import carrello
 import filtri
 import ui_components as ui
 
@@ -36,6 +37,7 @@ ui.render_header(
     icon="🕵️",
 )
 filtri.render_active_filters_banner(f)
+carrello.render_carrello_status()
 
 if f.n_estrazioni is not None:
     st.caption(
@@ -72,55 +74,74 @@ if btn_analizza:
     try:
         risultato = api_client.analisi_spia(numero_spia, ruota_spia, ruota_target, orizzonte_h, f.data_da)
     except ValueError as exc:
+        st.session_state["spia_risultato"] = None
         st.error(f"⚠️ {exc}")
     else:
+        st.session_state["spia_risultato"] = risultato
+        st.session_state["spia_risultato_label"] = (numero_spia, ruota_spia, ruota_target)
+
+risultato = st.session_state.get("spia_risultato")
+if risultato is not None:
+    numero_spia_r, ruota_spia_r, ruota_target_r = st.session_state["spia_risultato_label"]
+    st.write("")
+    n_occ = risultato["occorrenze_spia_utilizzate"]
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Occorrenze spia utili", n_occ)
+    c2.metric("Attesa naturale", f"{risultato['frequenza_naturale_attesa']:.3f} uscite")
+    c3.metric("Orizzonte monitorato", f"{risultato['orizzonte_h']} concorsi successivi")
+
+    if not risultato["campione_affidabile"]:
+        st.warning(
+            f"⚠️ **Campione ridotto ({n_occ} sortite utili, soglia consigliata ≥ 20)**: "
+            "l'Indice di Attrattiva su un campione così limitato è soggetto a elevata "
+            "variabilità casuale e va interpretato con cautela."
+        )
+    else:
+        st.success(f"✅ **Campione statistico robusto ({n_occ} occorrenze)**: dati sufficienti per una stima attendibile.")
+
+    df = pd.DataFrame(risultato["ranking"])
+    top3 = df.head(3)["numero"].tolist()
+    if top3:
+        st.markdown("#### 🏆 Podio numeri più attratti:")
+        ui.render_balls_row(top3, variant="sen", size="lg")
+
+    col_n, col_dest, col_add = st.columns([1, 1, 1])
+    with col_n:
+        top_n_carrello = st.number_input("Quanti aggiungere (Top N)", min_value=1, max_value=90, value=3, key="spia_top_n")
+    with col_dest:
+        dest_carrello = st.selectbox("Aggiungi a", ["lotto", "superenalotto"], format_func=str.title, key="spia_carrello_dest")
+    with col_add:
         st.write("")
-        n_occ = risultato["occorrenze_spia_utilizzate"]
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Occorrenze spia utili", n_occ)
-        c2.metric("Attesa naturale", f"{risultato['frequenza_naturale_attesa']:.3f} uscite")
-        c3.metric("Orizzonte monitorato", f"{risultato['orizzonte_h']} concorsi successivi")
+        st.write("")
+        if st.button("➕ Aggiungi al carrello", key="spia_add_carrello"):
+            n = carrello.aggiungi_numeri(df.head(int(top_n_carrello))["numero"].tolist(), gioco=dest_carrello)
+            st.toast(f"Aggiunti {n} numeri al carrello {dest_carrello}.")
 
-        if not risultato["campione_affidabile"]:
-            st.warning(
-                f"⚠️ **Campione ridotto ({n_occ} sortite utili, soglia consigliata ≥ 20)**: "
-                "l'Indice di Attrattiva su un campione così limitato è soggetto a elevata "
-                "variabilità casuale e va interpretato con cautela."
-            )
-        else:
-            st.success(f"✅ **Campione statistico robusto ({n_occ} occorrenze)**: dati sufficienti per una stima attendibile.")
+    st.subheader(f"📊 Top 10 per Indice di Attrattiva (spia {numero_spia_r} su {ruota_spia_r} ➔ {ruota_target_r})")
+    top10 = df.head(10)
+    fig = px.bar(
+        top10, x="numero", y="indice_attrattiva",
+        labels={"numero": "Numero target", "indice_attrattiva": "Indice di Attrattiva"},
+        color="indice_attrattiva", color_continuous_scale="YlOrRd",
+    )
+    fig.add_hline(
+        y=1.0, line_dash="dash", line_color="#10B981", line_width=2,
+        annotation_text="Attesa naturale casuale (1.0x)", annotation_position="top left",
+    )
+    fig.update_coloraxes(showscale=False)
+    st.plotly_chart(ui.apply_plotly_theme(fig, height=360), use_container_width=True)
 
-        df = pd.DataFrame(risultato["ranking"])
-        top3 = df.head(3)["numero"].tolist()
-        if top3:
-            st.markdown("#### 🏆 Podio numeri più attratti:")
-            ui.render_balls_row(top3, variant="sen", size="lg")
-
-        st.subheader(f"📊 Top 10 per Indice di Attrattiva (spia {numero_spia} su {ruota_spia} ➔ {ruota_target})")
-        top10 = df.head(10)
-        fig = px.bar(
-            top10, x="numero", y="indice_attrattiva",
-            labels={"numero": "Numero target", "indice_attrattiva": "Indice di Attrattiva"},
-            color="indice_attrattiva", color_continuous_scale="YlOrRd",
+    with st.expander("📋 Graduatoria completa dei 90 numeri", expanded=True):
+        st.dataframe(
+            df, use_container_width=True, hide_index=True, height=450,
+            column_config={
+                "numero": st.column_config.NumberColumn("Numero", format="%02d"),
+                "frequenza_post_spia": st.column_config.NumberColumn("Frequenza media post-spia", format="%.4f"),
+                "indice_attrattiva": st.column_config.ProgressColumn(
+                    "Indice di attrattiva",
+                    help="Rapporto rispetto alla frequenza naturale (1.0 = neutrale)",
+                    format="%.2fx", min_value=0.0,
+                    max_value=max(float(df["indice_attrattiva"].max() or 0.0), 2.0),
+                ),
+            },
         )
-        fig.add_hline(
-            y=1.0, line_dash="dash", line_color="#10B981", line_width=2,
-            annotation_text="Attesa naturale casuale (1.0x)", annotation_position="top left",
-        )
-        fig.update_coloraxes(showscale=False)
-        st.plotly_chart(ui.apply_plotly_theme(fig, height=360), use_container_width=True)
-
-        with st.expander("📋 Graduatoria completa dei 90 numeri", expanded=True):
-            st.dataframe(
-                df, use_container_width=True, hide_index=True, height=450,
-                column_config={
-                    "numero": st.column_config.NumberColumn("Numero", format="%02d"),
-                    "frequenza_post_spia": st.column_config.NumberColumn("Frequenza media post-spia", format="%.4f"),
-                    "indice_attrattiva": st.column_config.ProgressColumn(
-                        "Indice di attrattiva",
-                        help="Rapporto rispetto alla frequenza naturale (1.0 = neutrale)",
-                        format="%.2fx", min_value=0.0,
-                        max_value=max(float(df["indice_attrattiva"].max() or 0.0), 2.0),
-                    ),
-                },
-            )

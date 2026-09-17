@@ -14,6 +14,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 import api_client
+import carrello
 import filtri
 import ui_components as ui
 
@@ -30,6 +31,7 @@ ui.render_header(
     icon="📈",
 )
 filtri.render_active_filters_banner(f)
+carrello.render_carrello_status()
 
 POSIZIONI_LOTTO = ["Primo", "Secondo", "Terzo", "Quarto", "Quinto"]
 POSIZIONI_SEN = ["n1", "n2", "n3", "n4", "n5", "n6"]

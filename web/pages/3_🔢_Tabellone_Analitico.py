@@ -27,6 +27,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 import api_client
+import carrello
 import filtri
 import ui_components as ui
 
@@ -43,6 +44,7 @@ ui.render_header(
     icon="🔢",
 )
 filtri.render_active_filters_banner(f)
+carrello.render_carrello_status()
 
 st.markdown(
     """
@@ -154,6 +156,30 @@ else:
             "categorie": st.column_config.TextColumn("Stati & categorie"),
         },
     )
+
+    st.write("")
+    st.subheader("🛒 Aggiungi al carrello")
+    st.caption("Aggiunge i numeri Lotto della categoria (o della selezione manuale) al carrello condiviso, da usare nel Calcolatore & Sistemi.")
+    categorie_utili = ["oro", "iper-ritardatario", "ritardatario", "frequente"]
+    cols_cat = st.columns(len(categorie_utili))
+    for col, cat in zip(cols_cat, categorie_utili):
+        sottoinsieme = df[df["categorie"].apply(lambda cs, c=cat: c in cs)]["numero"].tolist()
+        if col.button(f"➕ {EMOJI.get(cat, cat)} ({len(sottoinsieme)})", key=f"add_cat_{cat}", disabled=not sottoinsieme):
+            n = carrello.aggiungi_numeri(sottoinsieme, gioco="lotto")
+            st.toast(f"Aggiunti {n} numeri al carrello Lotto.")
+
+    col_sel, col_add = st.columns([3, 1])
+    with col_sel:
+        selezione_manuale = st.multiselect(
+            "Oppure seleziona manualmente numeri dal prospetto", options=df["numero"].tolist(),
+            key="tabellone_selezione_manuale",
+        )
+    with col_add:
+        st.write("")
+        st.write("")
+        if st.button("➕ Aggiungi selezionati", key="add_selezione_manuale", disabled=not selezione_manuale):
+            n = carrello.aggiungi_numeri(selezione_manuale, gioco="lotto")
+            st.toast(f"Aggiunti {n} numeri al carrello Lotto.")
 
     col_csv, col_json = st.columns(2)
     with col_csv:

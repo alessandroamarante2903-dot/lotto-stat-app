@@ -113,9 +113,9 @@ def apply_plotly_theme(fig: go.Figure, height: int = 380) -> go.Figure:
 
 
 def render_quick_nav() -> None:
-    """Renderizza le card di navigazione rapida verso i 4 moduli parametrici."""
+    """Renderizza le card di navigazione rapida verso i 5 moduli parametrici."""
     st.markdown("<h4 style='color: #F8FAFC; margin: 18px 0 10px 0;'>🔍 Moduli di Analisi Specialistica</h4>", unsafe_allow_html=True)
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
     with c1:
         with st.container(border=True):
             st.page_link("pages/1_📈_Analizzatore_Somme.py", label="**Analizzatore Somme**", icon="📈")
@@ -132,4 +132,8 @@ def render_quick_nav() -> None:
         with st.container(border=True):
             st.page_link("pages/4_🕵️_Numero_Spia.py", label="**Numero Spia**", icon="🕵️")
             st.caption("Frequenza condizionata post-spia con Indice di Attrattiva.")
+    with c5:
+        with st.container(border=True):
+            st.page_link("pages/5_🧮_Calcolatore_Sistemi.py", label="**Calcolatore & Sistemi**", icon="🧮")
+            st.caption("Costruisci il sistema dal carrello numeri e calcola colonne e costo.")
 
