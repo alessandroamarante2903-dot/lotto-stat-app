@@ -63,6 +63,9 @@ SQL_STATO_ARCHIVIO = """
 ui.inject_custom_css()
 
 df_stato = db.query_df(SQL_STATO_ARCHIVIO)
+for _colonna_data in ("ultima_estrazione_lotto", "ultima_estrazione_superenalotto"):
+    if _colonna_data in df_stato.columns:
+        df_stato[_colonna_data] = df_stato[_colonna_data].map(lambda v: str(v) if v is not None else None)
 
 badges_testata: list[tuple[str, str]] = []
 if not df_stato.empty:

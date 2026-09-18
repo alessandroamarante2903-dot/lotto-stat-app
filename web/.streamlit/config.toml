@@ -4,8 +4,7 @@
 # volumi di lotto_stat_web in podman-compose.yml) faccia ripartire da
 # sola la UI, senza il prompt manuale "Source file changed - Rerun".
 [server]
-runOnSave = false
-fileWatcherType = "none"
+runOnSave = true
 
 [browser]
 gatherUsageStats = false

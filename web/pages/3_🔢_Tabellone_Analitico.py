@@ -60,6 +60,13 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+ruota_tabellone = f.ruota if f.ruota != "Tutte" else "Napoli"
+if f.ruota == "Tutte":
+    st.info(
+        "ℹ️ L'IRR (Indice di Ritardo Relativo) richiede una ruota specifica: imposta una singola "
+        "ruota nella barra laterale (impostata provvisoriamente: **Napoli**)."
+    )
+
 with st.container(border=True):
     col_stato, col_k = st.columns([3, 1])
     with col_stato:
@@ -71,7 +78,7 @@ with st.container(border=True):
         passo_k = st.number_input("K (passo del ritardo)", min_value=2, max_value=20, value=5, key="tabellone_passo_k")
 
 righe = api_client.analisi_tabellone(
-    f.ruota, f.data_da, f.data_a, f.n_estrazioni, f.ritardo_min, f.ritardo_max, stato, passo_k,
+    ruota_tabellone, f.data_da, f.data_a, f.n_estrazioni, f.ritardo_min, f.ritardo_max, stato, passo_k,
 )
 df = pd.DataFrame(righe)
 
