@@ -58,7 +58,18 @@ def _limiti_storico(gioco: str) -> tuple[date, date]:
     return df.iloc[0]["data_min"], df.iloc[0]["data_max"]
 
 
-def pannello_parametri(gioco_default: str = "lotto") -> Filtri:
+def pannello_parametri(
+    gioco_default: str = "lotto",
+    giochi_disponibili: tuple[str, ...] = ("lotto", "superenalotto"),
+) -> Filtri:
+    """`giochi_disponibili` limita le opzioni del radio "Gioco Target": i moduli
+    Lotto-only (Tabellone Analitico, Simulatore Backtest, Numero Spia — nessuna
+    delle rispettive query di backend accetta un parametro 'gioco') passano
+    `("lotto",)` per evitare di mostrare un'opzione SuperEnalotto che, se scelta,
+    non avrebbe alcun effetto sull'analisi ma verrebbe comunque dichiarata come
+    "Gioco: SuperEnalotto" nel banner filtri attivi — bug reale riscontrato in
+    pratica (i numeri selezionati finivano nel carrello Lotto nonostante il
+    banner dicesse SuperEnalotto)."""
     ui.inject_custom_css()
     st.sidebar.markdown(
         "<div style='display: flex; align-items: center; gap: 8px; margin-bottom: 12px;'>"
@@ -69,11 +80,16 @@ def pannello_parametri(gioco_default: str = "lotto") -> Filtri:
     )
 
     with st.sidebar.container(border=True):
-        gioco = st.radio(
-            "Gioco Target", ["lotto", "superenalotto"],
-            format_func=lambda g: "Lotto" if g == "lotto" else "SuperEnalotto",
-            index=0 if gioco_default == "lotto" else 1, key="filtri_gioco",
-        )
+        if len(giochi_disponibili) == 1:
+            gioco = giochi_disponibili[0]
+            st.caption(f"🎯 Gioco Target: **{'Lotto' if gioco == 'lotto' else 'SuperEnalotto'}** (modulo dedicato)")
+        else:
+            gioco = st.radio(
+                "Gioco Target", list(giochi_disponibili),
+                format_func=lambda g: "Lotto" if g == "lotto" else "SuperEnalotto",
+                index=list(giochi_disponibili).index(gioco_default) if gioco_default in giochi_disponibili else 0,
+                key="filtri_gioco",
+            )
 
         ruota = "Tutte"
         if gioco == "lotto":

@@ -33,7 +33,7 @@ import ui_components as ui
 
 st.set_page_config(page_title="Tabellone Analitico — Control Room", page_icon="🔢", layout="wide")
 
-f = filtri.pannello_parametri(gioco_default="lotto")
+f = filtri.pannello_parametri(gioco_default="lotto", giochi_disponibili=("lotto",))
 
 ui.render_header(
     title="Tabellone Analitico Dinamico Interattivo",
